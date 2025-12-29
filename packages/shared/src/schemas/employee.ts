@@ -49,18 +49,20 @@ export const ShiftSchema = z.object({
   updatedAt: z.date(),
 });
 
-export const CreateShiftSchema = z.object({
+const BaseShiftSchema = z.object({
   date: z.date(),
   startTime: z.date(),
   endTime: z.date(),
   breakMins: z.number().nonnegative().default(0),
   notes: z.string().optional(),
-}).refine((data) => data.endTime > data.startTime, {
+});
+
+export const CreateShiftSchema = BaseShiftSchema.refine((data) => data.endTime > data.startTime, {
   message: 'End time must be after start time',
   path: ['endTime'],
 });
 
-export const UpdateShiftSchema = CreateShiftSchema.partial();
+export const UpdateShiftSchema = BaseShiftSchema.partial();
 
 // Time Entry schemas
 export const TimeEntrySchema = z.object({

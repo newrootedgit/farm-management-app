@@ -3,23 +3,32 @@ import { CreateFarmSchema, UpdateFarmSchema } from '@farm/shared';
 import { requireAuth, requireRole } from '../../plugins/tenant.js';
 import { handleError, NotFoundError, ForbiddenError } from '../../lib/errors.js';
 
+// Demo user ID for development
+const DEMO_USER_ID = 'demo-user-1';
+
 const farmsRoutes: FastifyPluginAsync = async (fastify) => {
+  // Helper to get user ID (uses demo user in dev mode)
+  const getUserId = (request: any): string => {
+    if (request.userId) return request.userId;
+    if (process.env.SKIP_AUTH === 'true') return DEMO_USER_ID;
+    throw new Error('Unauthorized');
+  };
+
   // List user's farms
-  fastify.get('/farms', {
-    preHandler: [requireAuth()],
-  }, async (request, reply) => {
+  fastify.get('/farms', async (request, reply) => {
     try {
+      const userId = getUserId(request);
       const farms = await fastify.prisma.farm.findMany({
         where: {
           users: {
             some: {
-              userId: request.userId,
+              userId: userId,
             },
           },
         },
         include: {
           users: {
-            where: { userId: request.userId },
+            where: { userId: userId },
             select: { role: true },
           },
           _count: {

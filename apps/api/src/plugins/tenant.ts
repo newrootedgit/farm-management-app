@@ -31,8 +31,16 @@ export function requireRole(minRole: FarmRole) {
   };
 }
 
+// Demo user ID for development mode
+const DEMO_USER_ID = 'demo-user-1';
+
 export function requireAuth() {
   return async (request: FastifyRequest, reply: FastifyReply) => {
+    // Skip auth in development mode
+    if (process.env.SKIP_AUTH === 'true') {
+      request.userId = DEMO_USER_ID;
+      return;
+    }
     if (!request.userId) {
       throw new UnauthorizedError('Authentication required');
     }
@@ -44,6 +52,11 @@ const tenantPlugin: FastifyPluginAsync = async (fastify) => {
   fastify.decorateRequest('farmRole', undefined);
 
   fastify.addHook('preHandler', async (request: FastifyRequest) => {
+    // In skip auth mode, set demo user
+    if (process.env.SKIP_AUTH === 'true' && !request.userId) {
+      request.userId = DEMO_USER_ID;
+    }
+
     // Extract farmId from route params
     const params = request.params as { farmId?: string };
     const farmId = params.farmId;

@@ -32,18 +32,20 @@ export const SeasonSchema = z.object({
   updatedAt: z.date(),
 });
 
-export const CreateSeasonSchema = z.object({
+const BaseSeasonSchema = z.object({
   name: z.string().min(1, 'Season name is required').max(100),
   year: z.number().int().min(2020).max(2100),
   startDate: z.date(),
   endDate: z.date(),
   status: SeasonStatusSchema.default('PLANNING'),
-}).refine((data) => data.endDate > data.startDate, {
+});
+
+export const CreateSeasonSchema = BaseSeasonSchema.refine((data) => data.endDate > data.startDate, {
   message: 'End date must be after start date',
   path: ['endDate'],
 });
 
-export const UpdateSeasonSchema = CreateSeasonSchema.partial();
+export const UpdateSeasonSchema = BaseSeasonSchema.partial();
 
 // Crop Plan schemas
 export const CropPlanSchema = z.object({
