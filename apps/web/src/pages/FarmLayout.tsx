@@ -1,10 +1,86 @@
+import { useEffect, useState, useRef, useCallback } from 'react';
 import { useFarmStore } from '@/stores/farm-store';
-import { useFarmLayout, useZones } from '@/lib/api-client';
+import { useCanvasStore, CanvasZone } from '@/stores/canvas-store';
+import { useFarmLayout, useUpdateFarmLayout, useZones } from '@/lib/api-client';
+import { FarmCanvas, CanvasToolbar, PropertiesPanel } from '@/components/farm-canvas';
 
 export default function FarmLayout() {
   const { currentFarmId } = useFarmStore();
   const { data: layout, isLoading: layoutLoading } = useFarmLayout(currentFarmId ?? undefined);
-  const { data: zones, isLoading: zonesLoading } = useZones(currentFarmId ?? undefined);
+  const { data: apiZones, isLoading: zonesLoading } = useZones(currentFarmId ?? undefined);
+  const updateLayout = useUpdateFarmLayout(currentFarmId ?? '');
+
+  const { zones, setZones, selectedId, setDirty } = useCanvasStore();
+  const [selectedZone, setSelectedZone] = useState<CanvasZone | null>(null);
+  const [canvasSize, setCanvasSize] = useState({ width: 800, height: 600 });
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  // Sync API zones to canvas store on load
+  useEffect(() => {
+    if (apiZones) {
+      const canvasZones: CanvasZone[] = apiZones.map((z) => ({
+        id: z.id,
+        name: z.name,
+        type: z.type,
+        color: z.color,
+        x: z.positionX ?? 50,
+        y: z.positionY ?? 50,
+        width: z.width ?? 150,
+        height: z.height ?? 100,
+      }));
+      setZones(canvasZones);
+    }
+  }, [apiZones, setZones]);
+
+  // Update canvas size based on container
+  useEffect(() => {
+    const updateSize = () => {
+      if (containerRef.current) {
+        const rect = containerRef.current.getBoundingClientRect();
+        setCanvasSize({
+          width: rect.width,
+          height: Math.max(500, rect.height),
+        });
+      }
+    };
+
+    updateSize();
+    window.addEventListener('resize', updateSize);
+    return () => window.removeEventListener('resize', updateSize);
+  }, []);
+
+  // Find selected zone
+  useEffect(() => {
+    if (selectedId) {
+      const zone = zones.find((z) => z.id === selectedId);
+      setSelectedZone(zone ?? null);
+    } else {
+      setSelectedZone(null);
+    }
+  }, [selectedId, zones]);
+
+  // Handle save
+  const handleSave = useCallback(async () => {
+    if (!currentFarmId) return;
+
+    // Save layout canvas data
+    await updateLayout.mutateAsync({
+      width: layout?.canvasData?.width ?? 1200,
+      height: layout?.canvasData?.height ?? 800,
+      backgroundColor: '#f5f5f5',
+      gridSize: 20,
+    });
+
+    // TODO: Also save zone positions to backend
+    // This would require zone update API calls
+
+    setDirty(false);
+  }, [currentFarmId, layout, updateLayout, setDirty]);
+
+  // Handle zone selection from canvas
+  const handleZoneSelect = useCallback((zone: CanvasZone | null) => {
+    setSelectedZone(zone);
+  }, []);
 
   if (!currentFarmId) {
     return (
@@ -26,56 +102,35 @@ export default function FarmLayout() {
   }
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold">Farm Layout</h1>
-          <p className="text-muted-foreground">Interactive 2D view of your farm</p>
-        </div>
-        <div className="flex gap-2">
-          <button className="px-4 py-2 bg-secondary text-secondary-foreground rounded-md hover:bg-secondary/80">
-            Toggle Grid
-          </button>
-          <button className="px-4 py-2 bg-primary text-primary-foreground rounded-md hover:bg-primary/90">
-            Add Zone
-          </button>
-        </div>
+    <div className="h-[calc(100vh-8rem)] flex flex-col">
+      <div className="mb-4">
+        <h1 className="text-2xl font-bold">Farm Layout</h1>
+        <p className="text-muted-foreground">Interactive 2D view of your farm</p>
       </div>
 
-      {/* Canvas placeholder - Konva.js will go here */}
-      <div className="border rounded-lg bg-muted/20 h-[600px] flex items-center justify-center">
-        <div className="text-center">
-          <div className="text-4xl mb-4">🗺️</div>
-          <h3 className="text-lg font-semibold">Farm Canvas</h3>
-          <p className="text-muted-foreground">Konva.js canvas will render here</p>
-          <p className="text-sm text-muted-foreground mt-2">
-            {zones?.length || 0} zones defined • Canvas: {layout?.canvasData?.width}x{layout?.canvasData?.height}
-          </p>
-        </div>
-      </div>
+      <div className="flex-1 flex flex-col border rounded-lg overflow-hidden bg-card">
+        <CanvasToolbar onSave={handleSave} isSaving={updateLayout.isPending} />
 
-      {/* Zone list */}
-      {zones && zones.length > 0 && (
-        <div>
-          <h2 className="text-lg font-semibold mb-3">Zones ({zones.length})</h2>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {zones.map((zone) => (
-              <div key={zone.id} className="border rounded-lg p-4 bg-card">
-                <div className="flex items-center gap-3">
-                  <div
-                    className="h-4 w-4 rounded"
-                    style={{ backgroundColor: zone.color }}
-                  />
-                  <div>
-                    <h3 className="font-medium">{zone.name}</h3>
-                    <p className="text-sm text-muted-foreground">{zone.type}</p>
-                  </div>
-                </div>
-              </div>
-            ))}
+        <div className="flex-1 flex">
+          {/* Canvas container */}
+          <div ref={containerRef} className="flex-1">
+            <FarmCanvas
+              width={canvasSize.width}
+              height={canvasSize.height}
+              onZoneSelect={handleZoneSelect}
+            />
           </div>
+
+          {/* Properties panel */}
+          <PropertiesPanel zone={selectedZone} />
         </div>
-      )}
+      </div>
+
+      {/* Instructions */}
+      <div className="mt-4 text-sm text-muted-foreground">
+        <strong>Tips:</strong> Use the toolbar to switch between Select and Draw Zone modes.
+        Scroll to zoom, drag zones to move them. Click a zone to edit its properties.
+      </div>
     </div>
   );
 }
