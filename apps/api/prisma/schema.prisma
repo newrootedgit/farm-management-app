@@ -1,0 +1,691 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================================
+// MULTI-TENANCY & AUTH
+// ============================================================================
+
+model Company {
+  id        String   @id @default(cuid())
+  name      String
+  slug      String   @unique
+  farms     Farm[]
+  admins    User[]   @relation("CompanyAdmins")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Farm {
+  id        String   @id @default(cuid())
+  name      String
+  slug      String
+  companyId String?
+  company   Company? @relation(fields: [companyId], references: [id])
+
+  timezone String @default("UTC")
+  currency String @default("USD")
+
+  // Relations to all tenant-scoped data
+  users              FarmUser[]
+  zones              Zone[]
+  farmLayout         FarmLayout?
+  machines           Machine[]
+  employees          Employee[]
+  products           Product[]
+  productCategories  ProductCategory[]
+  inventoryItems     InventoryItem[]
+  financialAccounts  FinancialAccount[]
+  transactions       FinancialTransaction[]
+  budgets            Budget[]
+  wikiSpaces         WikiSpace[]
+  wikiTags           WikiTag[]
+  seasons            Season[]
+  tasks              Task[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([companyId, slug])
+  @@index([companyId])
+}
+
+model User {
+  id         String  @id @default(cuid())
+  externalId String  @unique // Clerk user ID
+  email      String  @unique
+  name       String?
+  avatarUrl  String?
+
+  farms          FarmUser[]
+  companyAdminOf Company[]  @relation("CompanyAdmins")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model FarmUser {
+  id     String   @id @default(cuid())
+  userId String
+  farmId String
+  role   FarmRole @default(EMPLOYEE)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  farm Farm @relation(fields: [farmId], references: [id], onDelete: Cascade)
+
+  employee Employee?
+
+  createdAt DateTime @default(now())
+
+  @@unique([userId, farmId])
+  @@index([farmId])
+}
+
+enum FarmRole {
+  OWNER
+  MANAGER
+  EMPLOYEE
+  VIEWER
+}
+
+// ============================================================================
+// FARM VISUALIZATION
+// ============================================================================
+
+model FarmLayout {
+  id     String @id @default(cuid())
+  farmId String @unique
+  farm   Farm   @relation(fields: [farmId], references: [id], onDelete: Cascade)
+
+  canvasData Json // { width, height, backgroundColor, gridSize, zoom, offsetX, offsetY }
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Zone {
+  id     String   @id @default(cuid())
+  farmId String
+  farm   Farm     @relation(fields: [farmId], references: [id], onDelete: Cascade)
+  name   String
+  type   ZoneType
+  color  String   @default("#4CAF50")
+
+  // Canvas positioning
+  positionX Float?
+  positionY Float?
+  width     Float?
+  height    Float?
+
+  // Metadata
+  area     Float?
+  soilType String?
+  notes    String?
+
+  machines    ZoneMachine[]
+  outputs     ZoneOutput[]
+  cropPlans   CropPlan[]
+  assignments TaskAssignment[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([farmId])
+}
+
+enum ZoneType {
+  FIELD
+  GREENHOUSE
+  STORAGE
+  PROCESSING
+  EQUIPMENT
+  OFFICE
+  OTHER
+}
+
+model Machine {
+  id           String    @id @default(cuid())
+  farmId       String
+  farm         Farm      @relation(fields: [farmId], references: [id], onDelete: Cascade)
+  name         String
+  type         String
+  model        String?
+  serialNumber String?
+  purchaseDate DateTime?
+
+  lastMaintenance DateTime?
+  nextMaintenance DateTime?
+
+  zones ZoneMachine[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([farmId])
+}
+
+model ZoneMachine {
+  id        String @id @default(cuid())
+  zoneId    String
+  machineId String
+
+  zone    Zone    @relation(fields: [zoneId], references: [id], onDelete: Cascade)
+  machine Machine @relation(fields: [machineId], references: [id], onDelete: Cascade)
+
+  positionX Float?
+  positionY Float?
+
+  @@unique([zoneId, machineId])
+}
+
+// ============================================================================
+// ZONE OUTPUT TRACKING
+// ============================================================================
+
+model ZoneOutput {
+  id        String   @id @default(cuid())
+  zoneId    String
+  zone      Zone     @relation(fields: [zoneId], references: [id], onDelete: Cascade)
+  date      DateTime
+  productId String?
+  product   Product? @relation(fields: [productId], references: [id])
+
+  quantity Float
+  unit     String
+  quality  String?
+  notes    String?
+
+  createdAt DateTime @default(now())
+
+  @@index([zoneId, date])
+}
+
+// ============================================================================
+// INVENTORY MANAGEMENT
+// ============================================================================
+
+model ProductCategory {
+  id       String            @id @default(cuid())
+  farmId   String
+  farm     Farm              @relation(fields: [farmId], references: [id], onDelete: Cascade)
+  name     String
+  parentId String?
+  parent   ProductCategory?  @relation("CategoryHierarchy", fields: [parentId], references: [id])
+  children ProductCategory[] @relation("CategoryHierarchy")
+  products Product[]
+
+  @@unique([farmId, name])
+  @@index([farmId])
+}
+
+model Product {
+  id         String           @id @default(cuid())
+  farmId     String
+  farm       Farm             @relation(fields: [farmId], references: [id], onDelete: Cascade)
+  name       String
+  sku        String?
+  categoryId String?
+  category   ProductCategory? @relation(fields: [categoryId], references: [id])
+
+  seedWeight Float?
+  seedUnit   String?
+
+  unitCost  Float?
+  unitPrice Float?
+
+  inventoryItems InventoryItem[]
+  zoneOutputs    ZoneOutput[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([farmId, sku])
+  @@index([farmId])
+}
+
+model InventoryItem {
+  id        String   @id @default(cuid())
+  farmId    String
+  farm      Farm     @relation(fields: [farmId], references: [id], onDelete: Cascade)
+  productId String
+  product   Product  @relation(fields: [productId], references: [id])
+  quantity  Float
+  unit      String
+  location  String?
+
+  expiryDate DateTime?
+  lotNumber  String?
+
+  reorderPoint Float?
+  reorderQty   Float?
+
+  transactions InventoryTransaction[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([farmId])
+  @@index([productId])
+}
+
+model InventoryTransaction {
+  id              String        @id @default(cuid())
+  inventoryItemId String
+  inventoryItem   InventoryItem @relation(fields: [inventoryItemId], references: [id], onDelete: Cascade)
+
+  type        InventoryTxType
+  quantity    Float
+  previousQty Float
+  newQty      Float
+
+  reason      String?
+  reference   String?
+  performedBy String?
+
+  createdAt DateTime @default(now())
+
+  @@index([inventoryItemId, createdAt])
+}
+
+enum InventoryTxType {
+  PURCHASE
+  SALE
+  ADJUSTMENT
+  TRANSFER
+  WASTE
+  HARVEST
+  PLANTING
+}
+
+// ============================================================================
+// EMPLOYEE MANAGEMENT
+// ============================================================================
+
+model Employee {
+  id         String  @id @default(cuid())
+  farmId     String
+  farm       Farm    @relation(fields: [farmId], references: [id], onDelete: Cascade)
+  farmUserId String? @unique
+  farmUser   FarmUser? @relation(fields: [farmUserId], references: [id])
+
+  firstName  String
+  lastName   String
+  email      String?
+  phone      String?
+  position   String?
+  department String?
+  hireDate   DateTime?
+  hourlyRate Float?
+
+  status EmployeeStatus @default(ACTIVE)
+
+  shifts      Shift[]
+  timeEntries TimeEntry[]
+  assignments TaskAssignment[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([farmId])
+}
+
+enum EmployeeStatus {
+  ACTIVE
+  ON_LEAVE
+  TERMINATED
+}
+
+model Shift {
+  id         String   @id @default(cuid())
+  employeeId String
+  employee   Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  date      DateTime
+  startTime DateTime
+  endTime   DateTime
+  breakMins Int      @default(0)
+
+  notes String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([employeeId, date])
+}
+
+model TimeEntry {
+  id         String   @id @default(cuid())
+  employeeId String
+  employee   Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  clockIn    DateTime
+  clockOut   DateTime?
+  breakMins  Int       @default(0)
+  totalHours Float?
+
+  notes      String?
+  approved   Boolean @default(false)
+  approvedBy String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([employeeId, clockIn])
+}
+
+// ============================================================================
+// FINANCIAL PROJECTIONS
+// ============================================================================
+
+model FinancialAccount {
+  id       String      @id @default(cuid())
+  farmId   String
+  farm     Farm        @relation(fields: [farmId], references: [id], onDelete: Cascade)
+  name     String
+  type     AccountType
+  code     String?
+  parentId String?
+
+  transactions FinancialTransaction[]
+  budgetItems  BudgetItem[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([farmId, code])
+  @@index([farmId])
+}
+
+enum AccountType {
+  REVENUE
+  EXPENSE
+  ASSET
+  LIABILITY
+}
+
+model FinancialTransaction {
+  id        String           @id @default(cuid())
+  farmId    String
+  farm      Farm             @relation(fields: [farmId], references: [id], onDelete: Cascade)
+  accountId String
+  account   FinancialAccount @relation(fields: [accountId], references: [id])
+
+  date   DateTime
+  amount Float
+  type   TransactionType
+
+  description String?
+  reference   String?
+  category    String?
+
+  zoneId    String?
+  productId String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([farmId, date])
+  @@index([accountId])
+}
+
+enum TransactionType {
+  INCOME
+  EXPENSE
+}
+
+model Budget {
+  id     String       @id @default(cuid())
+  farmId String
+  farm   Farm         @relation(fields: [farmId], references: [id], onDelete: Cascade)
+  name   String
+  year   Int
+  status BudgetStatus @default(DRAFT)
+
+  items BudgetItem[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([farmId, year, name])
+  @@index([farmId])
+}
+
+enum BudgetStatus {
+  DRAFT
+  APPROVED
+  CLOSED
+}
+
+model BudgetItem {
+  id        String           @id @default(cuid())
+  budgetId  String
+  budget    Budget           @relation(fields: [budgetId], references: [id], onDelete: Cascade)
+  accountId String
+  account   FinancialAccount @relation(fields: [accountId], references: [id])
+
+  jan Float @default(0)
+  feb Float @default(0)
+  mar Float @default(0)
+  apr Float @default(0)
+  may Float @default(0)
+  jun Float @default(0)
+  jul Float @default(0)
+  aug Float @default(0)
+  sep Float @default(0)
+  oct Float @default(0)
+  nov Float @default(0)
+  dec Float @default(0)
+
+  notes String?
+
+  @@unique([budgetId, accountId])
+}
+
+// ============================================================================
+// SOPs & INTERNAL WIKI
+// ============================================================================
+
+model WikiSpace {
+  id     String @id @default(cuid())
+  farmId String
+  farm   Farm   @relation(fields: [farmId], references: [id], onDelete: Cascade)
+
+  name String
+  slug String
+  icon String?
+
+  pages WikiPage[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([farmId, slug])
+  @@index([farmId])
+}
+
+model WikiPage {
+  id      String    @id @default(cuid())
+  spaceId String
+  space   WikiSpace @relation(fields: [spaceId], references: [id], onDelete: Cascade)
+
+  title   String
+  slug    String
+  content Json // TipTap JSON format
+
+  parentId String?
+  parent   WikiPage?  @relation("PageHierarchy", fields: [parentId], references: [id])
+  children WikiPage[] @relation("PageHierarchy")
+
+  author    String
+  published Boolean @default(false)
+
+  revisions WikiRevision[]
+  tags      WikiTag[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([spaceId, slug])
+  @@index([spaceId])
+}
+
+model WikiRevision {
+  id     String   @id @default(cuid())
+  pageId String
+  page   WikiPage @relation(fields: [pageId], references: [id], onDelete: Cascade)
+
+  content Json
+  author  String
+  comment String?
+
+  createdAt DateTime @default(now())
+
+  @@index([pageId, createdAt])
+}
+
+model WikiTag {
+  id     String @id @default(cuid())
+  farmId String
+  farm   Farm   @relation(fields: [farmId], references: [id], onDelete: Cascade)
+  name   String
+
+  pages WikiPage[]
+
+  @@unique([farmId, name])
+  @@index([farmId])
+}
+
+// ============================================================================
+// FARM PLANNING
+// ============================================================================
+
+model Season {
+  id     String @id @default(cuid())
+  farmId String
+  farm   Farm   @relation(fields: [farmId], references: [id], onDelete: Cascade)
+
+  name      String
+  year      Int
+  startDate DateTime
+  endDate   DateTime
+
+  status SeasonStatus @default(PLANNING)
+
+  cropPlans CropPlan[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([farmId, year])
+}
+
+enum SeasonStatus {
+  PLANNING
+  ACTIVE
+  COMPLETED
+}
+
+model CropPlan {
+  id       String @id @default(cuid())
+  seasonId String
+  season   Season @relation(fields: [seasonId], references: [id], onDelete: Cascade)
+  zoneId   String
+  zone     Zone   @relation(fields: [zoneId], references: [id])
+
+  cropName String
+  variety  String?
+
+  seedDate       DateTime?
+  transplantDate DateTime?
+  harvestStart   DateTime?
+  harvestEnd     DateTime?
+
+  targetYield Float?
+  targetUnit  String?
+  actualYield Float?
+
+  notes String?
+
+  tasks Task[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([seasonId])
+  @@index([zoneId])
+}
+
+model Task {
+  id          String @id @default(cuid())
+  farmId      String
+  farm        Farm   @relation(fields: [farmId], references: [id], onDelete: Cascade)
+  title       String
+  description String?
+
+  type TaskType
+
+  dueDate   DateTime?
+  startDate DateTime?
+
+  status   TaskStatus   @default(TODO)
+  priority TaskPriority @default(MEDIUM)
+
+  cropPlanId String?
+  cropPlan   CropPlan? @relation(fields: [cropPlanId], references: [id])
+
+  assignments TaskAssignment[]
+
+  recurrence Json?
+
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  completedAt DateTime?
+
+  @@index([farmId, status])
+  @@index([farmId, dueDate])
+}
+
+enum TaskType {
+  PLANTING
+  WATERING
+  FERTILIZING
+  HARVESTING
+  MAINTENANCE
+  INSPECTION
+  OTHER
+}
+
+enum TaskStatus {
+  TODO
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+enum TaskPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+model TaskAssignment {
+  id     String @id @default(cuid())
+  taskId String
+  task   Task   @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  employeeId String?
+  employee   Employee? @relation(fields: [employeeId], references: [id])
+  zoneId     String?
+  zone       Zone?     @relation(fields: [zoneId], references: [id])
+
+  createdAt DateTime @default(now())
+
+  @@index([taskId])
+  @@index([employeeId])
+}
