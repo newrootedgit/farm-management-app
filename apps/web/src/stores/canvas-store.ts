@@ -41,6 +41,8 @@ export interface CanvasElement {
 
   // Custom metadata (e.g., tray capacity for grow racks)
   metadata?: {
+    levels?: number;
+    traysPerLevel?: number;
     trayCapacity?: number;
     [key: string]: unknown;
   };
@@ -75,10 +77,15 @@ interface CanvasState {
   activePresetId: string | null;
   setActiveElementType: (type: ElementType | null, presetId?: string | null) => void;
 
-  // Selection state
-  selectedId: string | null;
+  // Selection state (supports multi-select)
+  selectedIds: string[];
   selectedType: 'zone' | 'element' | null;
   setSelectedId: (id: string | null, type?: 'zone' | 'element' | null) => void;
+  toggleSelection: (id: string, type: 'zone' | 'element') => void;
+  addToSelection: (id: string, type: 'zone' | 'element') => void;
+  selectElementsInBounds: (bounds: { x: number; y: number; width: number; height: number }) => void;
+  clearSelection: () => void;
+  deleteSelectedElements: () => void;
 
   // Canvas view state
   zoom: number;
@@ -159,10 +166,92 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     });
   },
 
-  // Selection
-  selectedId: null,
+  // Selection (multi-select support)
+  selectedIds: [],
   selectedType: null,
-  setSelectedId: (id, type = null) => set({ selectedId: id, selectedType: type }),
+  setSelectedId: (id, type = null) => set({
+    selectedIds: id ? [id] : [],
+    selectedType: type
+  }),
+  toggleSelection: (id, type) => set((state) => {
+    const isSelected = state.selectedIds.includes(id);
+    if (isSelected) {
+      const newIds = state.selectedIds.filter((i) => i !== id);
+      return {
+        selectedIds: newIds,
+        selectedType: newIds.length > 0 ? type : null
+      };
+    } else {
+      return {
+        selectedIds: [...state.selectedIds, id],
+        selectedType: type
+      };
+    }
+  }),
+  addToSelection: (id, type) => set((state) => {
+    if (state.selectedIds.includes(id)) return state;
+    return {
+      selectedIds: [...state.selectedIds, id],
+      selectedType: type
+    };
+  }),
+  selectElementsInBounds: (bounds) => {
+    const { elements } = get();
+    const selectedIds: string[] = [];
+
+    for (const el of elements) {
+      if (el.type === 'WALL') {
+        // For walls, check if either endpoint is within bounds
+        const startX = el.startX ?? 0;
+        const startY = el.startY ?? 0;
+        const endX = el.endX ?? 0;
+        const endY = el.endY ?? 0;
+
+        const startInBounds =
+          startX >= bounds.x && startX <= bounds.x + bounds.width &&
+          startY >= bounds.y && startY <= bounds.y + bounds.height;
+        const endInBounds =
+          endX >= bounds.x && endX <= bounds.x + bounds.width &&
+          endY >= bounds.y && endY <= bounds.y + bounds.height;
+
+        if (startInBounds || endInBounds) {
+          selectedIds.push(el.id);
+        }
+      } else {
+        // For rectangles, check if the element overlaps with bounds
+        const elX = el.x ?? 0;
+        const elY = el.y ?? 0;
+        const elW = el.width ?? 0;
+        const elH = el.height ?? 0;
+
+        const overlaps =
+          elX < bounds.x + bounds.width &&
+          elX + elW > bounds.x &&
+          elY < bounds.y + bounds.height &&
+          elY + elH > bounds.y;
+
+        if (overlaps) {
+          selectedIds.push(el.id);
+        }
+      }
+    }
+
+    set({ selectedIds, selectedType: selectedIds.length > 0 ? 'element' : null });
+  },
+  clearSelection: () => set({ selectedIds: [], selectedType: null }),
+  deleteSelectedElements: () => {
+    const { selectedIds, elements, zones } = get();
+    if (selectedIds.length === 0) return;
+
+    get().pushHistory();
+    set({
+      elements: elements.filter((e) => !selectedIds.includes(e.id)),
+      zones: zones.filter((z) => !selectedIds.includes(z.id)),
+      selectedIds: [],
+      selectedType: null,
+      isDirty: true,
+    });
+  },
 
   // View
   zoom: 1,
@@ -199,12 +288,15 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     }));
   },
   deleteZone: (id) => {
-    set((state) => ({
-      zones: state.zones.filter((z) => z.id !== id),
-      selectedId: state.selectedId === id ? null : state.selectedId,
-      selectedType: state.selectedId === id ? null : state.selectedType,
-      isDirty: true,
-    }));
+    set((state) => {
+      const newSelectedIds = state.selectedIds.filter((i) => i !== id);
+      return {
+        zones: state.zones.filter((z) => z.id !== id),
+        selectedIds: newSelectedIds,
+        selectedType: newSelectedIds.length > 0 ? state.selectedType : null,
+        isDirty: true,
+      };
+    });
     get().pushHistory();
   },
 
@@ -225,12 +317,15 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     }));
   },
   deleteElement: (id) => {
-    set((state) => ({
-      elements: state.elements.filter((e) => e.id !== id),
-      selectedId: state.selectedId === id ? null : state.selectedId,
-      selectedType: state.selectedId === id ? null : state.selectedType,
-      isDirty: true,
-    }));
+    set((state) => {
+      const newSelectedIds = state.selectedIds.filter((i) => i !== id);
+      return {
+        elements: state.elements.filter((e) => e.id !== id),
+        selectedIds: newSelectedIds,
+        selectedType: newSelectedIds.length > 0 ? state.selectedType : null,
+        isDirty: true,
+      };
+    });
     get().pushHistory();
   },
 
@@ -350,4 +445,9 @@ export function calculateWallAngle(element: CanvasElement): number {
 // Generate unique ID
 export function generateId(prefix: string = 'el'): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+}
+
+// Get the first selected ID (for backward compatibility)
+export function getSelectedId(state: { selectedIds: string[] }): string | null {
+  return state.selectedIds.length > 0 ? state.selectedIds[0] : null;
 }

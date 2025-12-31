@@ -1,22 +1,23 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { useFarmStore } from '@/stores/farm-store';
-import { useCanvasStore, CanvasZone, CanvasElement, generateId } from '@/stores/canvas-store';
+import { useCanvasStore, CanvasElement, generateId } from '@/stores/canvas-store';
 import {
   useFarmLayout,
   useUpdateFarmLayout,
-  useZones,
   useLayoutElements,
   useCreateLayoutElement,
-  useUpdateLayoutElement,
-  useDeleteLayoutElement,
   useBulkUpdateLayoutElements,
   useElementPresets,
   useCreateElementPreset,
+  useUpdateElementPreset,
+  useDeleteElementPreset,
   useUserPreferences,
   useUpdateUserPreferences,
 } from '@/lib/api-client';
 import { FarmCanvas, CanvasToolbar, PropertiesPanel } from '@/components/farm-canvas';
 import { WallDrawModal } from '@/components/farm-canvas/WallDrawModal';
+import { GrowRackModal } from '@/components/farm-canvas/GrowRackModal';
+import { PresetManagerModal } from '@/components/farm-canvas/PresetManagerModal';
 import { LayoutTutorial } from '@/components/farm-canvas/LayoutTutorial';
 import type { UnitSystem } from '@farm/shared';
 
@@ -25,7 +26,6 @@ export default function FarmLayout() {
 
   // API queries
   const { data: layout, isLoading: layoutLoading } = useFarmLayout(currentFarmId ?? undefined);
-  const { data: apiZones, isLoading: zonesLoading } = useZones(currentFarmId ?? undefined);
   const { data: apiElements, isLoading: elementsLoading } = useLayoutElements(currentFarmId ?? undefined);
   const { data: presets } = useElementPresets(currentFarmId ?? undefined);
   const { data: userPrefs, isLoading: prefsLoading } = useUserPreferences(currentFarmId ?? undefined);
@@ -33,82 +33,71 @@ export default function FarmLayout() {
   // Mutations
   const updateLayout = useUpdateFarmLayout(currentFarmId ?? '');
   const createElement = useCreateLayoutElement(currentFarmId ?? '');
-  const updateElement = useUpdateLayoutElement(currentFarmId ?? '');
-  const deleteElement = useDeleteLayoutElement(currentFarmId ?? '');
   const bulkUpdateElements = useBulkUpdateLayoutElements(currentFarmId ?? '');
   const updatePreferences = useUpdateUserPreferences(currentFarmId ?? '');
   const createPreset = useCreateElementPreset(currentFarmId ?? '');
+  const updatePreset = useUpdateElementPreset(currentFarmId ?? '');
+  const deletePreset = useDeleteElementPreset(currentFarmId ?? '');
 
   // Canvas store
   const {
-    zones,
     elements,
-    setZones,
     setElements,
-    selectedId,
+    selectedIds,
     selectedType,
     setSelectedId,
+    clearSelection,
+    deleteSelectedElements,
     setDirty,
     unitSystem,
     setUnitSystem,
     resetWallDrawing,
-    addZone,
-    deleteZone,
     addElement: addElementToStore,
-    deleteElement: deleteElementFromStore,
     undo,
     redo,
     setActiveTool,
   } = useCanvasStore();
 
   // Local state
-  const [selectedZone, setSelectedZone] = useState<CanvasZone | null>(null);
   const [selectedElement, setSelectedElement] = useState<CanvasElement | null>(null);
+  const [selectedElements, setSelectedElements] = useState<CanvasElement[]>([]);
   const [canvasSize, setCanvasSize] = useState({ width: 800, height: 600 });
   const [showTutorial, setShowTutorial] = useState(false);
   const [wallModalStartPoint, setWallModalStartPoint] = useState<{ x: number; y: number } | null>(null);
-  const [clipboard, setClipboard] = useState<{ type: 'zone' | 'element'; data: CanvasZone | CanvasElement } | null>(null);
+  const [growRackModalOpen, setGrowRackModalOpen] = useState(false);
+  const [editingGrowRack, setEditingGrowRack] = useState<CanvasElement | null>(null);
+  const [presetManagerOpen, setPresetManagerOpen] = useState(false);
+  const [clipboard, setClipboard] = useState<CanvasElement[]>([]);
   const containerRef = useRef<HTMLDivElement>(null);
-
-  // Sync API zones to canvas store on load
-  useEffect(() => {
-    if (apiZones) {
-      const canvasZones: CanvasZone[] = apiZones.map((z) => ({
-        id: z.id,
-        name: z.name,
-        type: z.type,
-        color: z.color,
-        x: z.positionX ?? 50,
-        y: z.positionY ?? 50,
-        width: z.width ?? 150,
-        height: z.height ?? 100,
-      }));
-      setZones(canvasZones);
-    }
-  }, [apiZones, setZones]);
 
   // Sync API elements to canvas store on load
   useEffect(() => {
     if (apiElements) {
-      const canvasElements: CanvasElement[] = apiElements.map((el) => ({
-        id: el.id,
-        name: el.name,
-        type: el.type,
-        startX: el.startX ?? undefined,
-        startY: el.startY ?? undefined,
-        endX: el.endX ?? undefined,
-        endY: el.endY ?? undefined,
-        thickness: el.thickness ?? undefined,
-        x: el.positionX ?? undefined,
-        y: el.positionY ?? undefined,
-        width: el.width ?? undefined,
-        height: el.height ?? undefined,
-        rotation: el.rotation ?? 0,
-        color: el.color,
-        opacity: el.opacity,
-        presetId: el.presetId ?? undefined,
-        metadata: el.metadata as CanvasElement['metadata'] ?? undefined,
-      }));
+      const canvasElements: CanvasElement[] = apiElements.map((el) => {
+        // For walls, ensure coordinates are numbers (API might return null/string)
+        const isWall = el.type === 'WALL';
+        return {
+          id: el.id,
+          name: el.name,
+          type: el.type,
+          // Wall coordinates - convert to number, default to 0 for walls
+          startX: isWall ? (Number(el.startX) || 0) : undefined,
+          startY: isWall ? (Number(el.startY) || 0) : undefined,
+          endX: isWall ? (Number(el.endX) || 0) : undefined,
+          endY: isWall ? (Number(el.endY) || 0) : undefined,
+          thickness: el.thickness != null ? Number(el.thickness) : undefined,
+          // Non-wall element position
+          x: el.positionX != null ? Number(el.positionX) : undefined,
+          y: el.positionY != null ? Number(el.positionY) : undefined,
+          width: el.width != null ? Number(el.width) : undefined,
+          height: el.height != null ? Number(el.height) : undefined,
+          rotation: Number(el.rotation) || 0,
+          color: el.color,
+          opacity: el.opacity,
+          presetId: el.presetId ?? undefined,
+          metadata: el.metadata as CanvasElement['metadata'] ?? undefined,
+        };
+      });
       setElements(canvasElements);
     }
   }, [apiElements, setElements]);
@@ -124,38 +113,59 @@ export default function FarmLayout() {
     }
   }, [userPrefs, setUnitSystem]);
 
-  // Update canvas size based on container
+  // Update canvas size based on container using ResizeObserver for accuracy
   useEffect(() => {
     const updateSize = () => {
       if (containerRef.current) {
         const rect = containerRef.current.getBoundingClientRect();
         setCanvasSize({
-          width: rect.width,
-          height: Math.max(500, rect.height),
+          width: Math.floor(rect.width),
+          height: Math.max(500, Math.floor(rect.height)),
         });
       }
     };
 
+    // Initial size calculation
     updateSize();
+
+    // Re-check after layout settles (fixes timing issue on page load)
+    const frameId = requestAnimationFrame(() => {
+      updateSize();
+      // Double-check after a short delay for slow layouts
+      setTimeout(updateSize, 100);
+    });
+
+    // Use ResizeObserver for ongoing size tracking
+    const resizeObserver = new ResizeObserver(() => {
+      updateSize();
+    });
+
+    if (containerRef.current) {
+      resizeObserver.observe(containerRef.current);
+    }
+
     window.addEventListener('resize', updateSize);
-    return () => window.removeEventListener('resize', updateSize);
+    return () => {
+      window.removeEventListener('resize', updateSize);
+      cancelAnimationFrame(frameId);
+      resizeObserver.disconnect();
+    };
   }, []);
 
-  // Find selected zone or element
+  // Find selected element(s)
   useEffect(() => {
-    if (selectedId && selectedType === 'zone') {
-      const zone = zones.find((z) => z.id === selectedId);
-      setSelectedZone(zone ?? null);
-      setSelectedElement(null);
-    } else if (selectedId && selectedType === 'element') {
-      const element = elements.find((e) => e.id === selectedId);
-      setSelectedElement(element ?? null);
-      setSelectedZone(null);
+    if (selectedIds.length > 0 && selectedType === 'element') {
+      // For single selection, set selectedElement for backward compatibility
+      const firstElement = elements.find((e) => e.id === selectedIds[0]);
+      setSelectedElement(firstElement ?? null);
+      // Set all selected elements
+      const allSelected = elements.filter((e) => selectedIds.includes(e.id));
+      setSelectedElements(allSelected);
     } else {
-      setSelectedZone(null);
       setSelectedElement(null);
+      setSelectedElements([]);
     }
-  }, [selectedId, selectedType, zones, elements]);
+  }, [selectedIds, selectedType, elements]);
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -190,111 +200,108 @@ export default function FarmLayout() {
         return;
       }
 
-      // Cmd/Ctrl + C = Copy
+      // Cmd/Ctrl + C = Copy (copies all selected elements)
       if ((e.metaKey || e.ctrlKey) && e.key === 'c') {
-        if (selectedId && selectedType === 'zone' && selectedZone) {
+        if (selectedIds.length > 0 && selectedType === 'element' && selectedElements.length > 0) {
           e.preventDefault();
-          setClipboard({ type: 'zone', data: { ...selectedZone } });
-        } else if (selectedId && selectedType === 'element' && selectedElement) {
-          e.preventDefault();
-          setClipboard({ type: 'element', data: { ...selectedElement } });
+          // Deep copy all selected elements
+          setClipboard(selectedElements.map(el => ({
+            ...el,
+            metadata: el.metadata ? { ...el.metadata } : undefined,
+          })));
         }
         return;
       }
 
-      // Cmd/Ctrl + V = Paste
+      // Cmd/Ctrl + V = Paste (pastes all copied elements)
       if ((e.metaKey || e.ctrlKey) && e.key === 'v') {
-        if (clipboard) {
+        if (clipboard.length > 0) {
           e.preventDefault();
-          const offset = 20; // Offset so pasted item is visible
+          const offset = 20; // Offset so pasted items are visible
+          const newIds: string[] = [];
 
-          if (clipboard.type === 'zone') {
-            const original = clipboard.data as CanvasZone;
-            const newZone: CanvasZone = {
-              ...original,
-              id: `zone-${Date.now()}`,
-              name: `${original.name} (copy)`,
-              x: original.x + offset,
-              y: original.y + offset,
-            };
-            addZone(newZone);
-            setSelectedId(newZone.id, 'zone');
-          } else if (clipboard.type === 'element') {
-            const original = clipboard.data as CanvasElement;
+          for (const el of clipboard) {
             const newElement: CanvasElement = {
-              ...original,
-              id: generateId(original.type === 'WALL' ? 'wall' : 'el'),
-              name: `${original.name} (copy)`,
+              ...el,
+              id: generateId(el.type === 'WALL' ? 'wall' : 'el'),
+              name: `${el.name} (copy)`,
+              metadata: el.metadata ? { ...el.metadata } : undefined,
             };
 
             // Offset position based on element type
-            if (original.type === 'WALL') {
-              newElement.startX = (original.startX ?? 0) + offset;
-              newElement.startY = (original.startY ?? 0) + offset;
-              newElement.endX = (original.endX ?? 0) + offset;
-              newElement.endY = (original.endY ?? 0) + offset;
+            if (el.type === 'WALL') {
+              newElement.startX = (el.startX ?? 0) + offset;
+              newElement.startY = (el.startY ?? 0) + offset;
+              newElement.endX = (el.endX ?? 0) + offset;
+              newElement.endY = (el.endY ?? 0) + offset;
             } else {
-              newElement.x = (original.x ?? 0) + offset;
-              newElement.y = (original.y ?? 0) + offset;
+              newElement.x = (el.x ?? 0) + offset;
+              newElement.y = (el.y ?? 0) + offset;
             }
 
             addElementToStore(newElement);
-            setSelectedId(newElement.id, 'element');
+            newIds.push(newElement.id);
+          }
+
+          // Select all newly pasted elements
+          if (newIds.length === 1) {
+            setSelectedId(newIds[0], 'element');
+          } else if (newIds.length > 1) {
+            // Select all pasted elements
+            const { selectedIds: _, ...rest } = useCanvasStore.getState();
+            useCanvasStore.setState({ selectedIds: newIds, selectedType: 'element' });
           }
         }
         return;
       }
 
-      // Cmd/Ctrl + D = Duplicate (copy + paste in one action)
+      // Cmd/Ctrl + D = Duplicate (copy + paste in one action, duplicates all selected)
       if ((e.metaKey || e.ctrlKey) && e.key === 'd') {
         e.preventDefault();
         const offset = 20;
 
-        if (selectedId && selectedType === 'zone' && selectedZone) {
-          const newZone: CanvasZone = {
-            ...selectedZone,
-            id: `zone-${Date.now()}`,
-            name: `${selectedZone.name} (copy)`,
-            x: selectedZone.x + offset,
-            y: selectedZone.y + offset,
-          };
-          addZone(newZone);
-          setSelectedId(newZone.id, 'zone');
-        } else if (selectedId && selectedType === 'element' && selectedElement) {
-          const newElement: CanvasElement = {
-            ...selectedElement,
-            id: generateId(selectedElement.type === 'WALL' ? 'wall' : 'el'),
-            name: `${selectedElement.name} (copy)`,
-          };
+        if (selectedIds.length > 0 && selectedType === 'element' && selectedElements.length > 0) {
+          const newIds: string[] = [];
 
-          if (selectedElement.type === 'WALL') {
-            newElement.startX = (selectedElement.startX ?? 0) + offset;
-            newElement.startY = (selectedElement.startY ?? 0) + offset;
-            newElement.endX = (selectedElement.endX ?? 0) + offset;
-            newElement.endY = (selectedElement.endY ?? 0) + offset;
-          } else {
-            newElement.x = (selectedElement.x ?? 0) + offset;
-            newElement.y = (selectedElement.y ?? 0) + offset;
+          for (const el of selectedElements) {
+            const newElement: CanvasElement = {
+              ...el,
+              id: generateId(el.type === 'WALL' ? 'wall' : 'el'),
+              name: `${el.name} (copy)`,
+              metadata: el.metadata ? { ...el.metadata } : undefined,
+            };
+
+            if (el.type === 'WALL') {
+              newElement.startX = (el.startX ?? 0) + offset;
+              newElement.startY = (el.startY ?? 0) + offset;
+              newElement.endX = (el.endX ?? 0) + offset;
+              newElement.endY = (el.endY ?? 0) + offset;
+            } else {
+              newElement.x = (el.x ?? 0) + offset;
+              newElement.y = (el.y ?? 0) + offset;
+            }
+
+            addElementToStore(newElement);
+            newIds.push(newElement.id);
           }
 
-          addElementToStore(newElement);
-          setSelectedId(newElement.id, 'element');
+          // Select all duplicated elements
+          if (newIds.length === 1) {
+            setSelectedId(newIds[0], 'element');
+          } else if (newIds.length > 1) {
+            useCanvasStore.setState({ selectedIds: newIds, selectedType: 'element' });
+          }
         }
         return;
       }
 
-      // Delete or Backspace = Delete selected item
+      // Delete or Backspace = Delete selected item(s)
       if (e.key === 'Delete' || e.key === 'Backspace') {
-        if (selectedId && selectedType === 'zone') {
+        if (selectedIds.length > 0 && selectedType === 'element') {
           e.preventDefault();
-          deleteZone(selectedId);
-          setSelectedId(null);
-          setSelectedZone(null);
-        } else if (selectedId && selectedType === 'element') {
-          e.preventDefault();
-          deleteElementFromStore(selectedId);
-          setSelectedId(null);
+          deleteSelectedElements();
           setSelectedElement(null);
+          setSelectedElements([]);
         }
         return;
       }
@@ -302,9 +309,9 @@ export default function FarmLayout() {
       // Escape = Deselect / Cancel
       if (e.key === 'Escape') {
         e.preventDefault();
-        setSelectedId(null);
-        setSelectedZone(null);
+        clearSelection();
         setSelectedElement(null);
+        setSelectedElements([]);
         resetWallDrawing();
         setActiveTool('select');
         return;
@@ -314,14 +321,6 @@ export default function FarmLayout() {
       if (e.key === 's' || e.key === 'S' || e.key === 'v' || e.key === 'V') {
         e.preventDefault();
         setActiveTool('select');
-        return;
-      }
-
-      // Z = Zone tool
-      if (e.key === 'z' && !e.metaKey && !e.ctrlKey) {
-        // Only if not combined with Cmd/Ctrl (which is undo)
-        e.preventDefault();
-        setActiveTool('zone');
         return;
       }
 
@@ -336,18 +335,17 @@ export default function FarmLayout() {
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [
-    selectedId,
+    selectedIds,
     selectedType,
-    selectedZone,
     selectedElement,
+    selectedElements,
     clipboard,
     undo,
     redo,
-    addZone,
-    deleteZone,
     addElementToStore,
-    deleteElementFromStore,
+    deleteSelectedElements,
     setSelectedId,
+    clearSelection,
     resetWallDrawing,
     setActiveTool,
   ]);
@@ -365,35 +363,57 @@ export default function FarmLayout() {
         gridSize: 20,
       });
 
-      // Bulk update all elements
+      // Process all elements
       if (elements.length > 0) {
-        const elementUpdates = elements.map((el) => ({
-          id: el.id,
-          updates: {
+        // Separate new elements from existing ones
+        const existingIds = new Set(apiElements?.map((el) => el.id) ?? []);
+        const newElements = elements.filter((el) => !existingIds.has(el.id));
+        const existingElements = elements.filter((el) => existingIds.has(el.id));
+
+        // Create new elements via API
+        for (const el of newElements) {
+          await createElement.mutateAsync({
             name: el.name,
+            type: el.type,
             startX: el.startX,
             startY: el.startY,
             endX: el.endX,
             endY: el.endY,
-            thickness: el.thickness,
+            thickness: el.thickness ?? 10,
             positionX: el.x,
             positionY: el.y,
             width: el.width,
             height: el.height,
-            rotation: el.rotation,
+            rotation: el.rotation ?? 0,
             color: el.color,
             opacity: el.opacity,
             metadata: el.metadata,
-          },
-        }));
+          });
+        }
 
-        // Only send updates for elements that exist in the API
-        const existingElements = elementUpdates.filter((update) =>
-          apiElements?.some((apiEl) => apiEl.id === update.id)
-        );
-
+        // Bulk update existing elements
         if (existingElements.length > 0) {
-          await bulkUpdateElements.mutateAsync(existingElements);
+          const elementUpdates = existingElements.map((el) => ({
+            id: el.id,
+            updates: {
+              name: el.name,
+              startX: el.startX,
+              startY: el.startY,
+              endX: el.endX,
+              endY: el.endY,
+              thickness: el.thickness,
+              positionX: el.x,
+              positionY: el.y,
+              width: el.width,
+              height: el.height,
+              rotation: el.rotation,
+              color: el.color,
+              opacity: el.opacity,
+              metadata: el.metadata,
+            },
+          }));
+
+          await bulkUpdateElements.mutateAsync(elementUpdates);
         }
       }
 
@@ -401,22 +421,18 @@ export default function FarmLayout() {
     } catch (error) {
       console.error('Failed to save layout:', error);
     }
-  }, [currentFarmId, layout, elements, apiElements, updateLayout, bulkUpdateElements, setDirty]);
-
-  // Handle zone selection from canvas
-  const handleZoneSelect = useCallback((zone: CanvasZone | null) => {
-    setSelectedZone(zone);
-    if (!zone) {
-      setSelectedElement(null);
-    }
-  }, []);
+  }, [currentFarmId, layout, elements, apiElements, updateLayout, createElement, bulkUpdateElements, setDirty]);
 
   // Handle element selection from canvas
   const handleElementSelect = useCallback((element: CanvasElement | null) => {
     setSelectedElement(element);
-    if (!element) {
-      setSelectedZone(null);
-    }
+  }, []);
+
+  // Handle multi-selection from canvas (marquee or Cmd/Shift click)
+  const handleMultiSelect = useCallback((selectedElements: CanvasElement[]) => {
+    setSelectedElements(selectedElements);
+    // Set first element as the primary selected element for backward compatibility
+    setSelectedElement(selectedElements.length > 0 ? selectedElements[0] : null);
   }, []);
 
   // Handle unit change
@@ -448,12 +464,6 @@ export default function FarmLayout() {
     resetWallDrawing();
   }, [resetWallDrawing]);
 
-  // Handle create preset (placeholder - could open a modal)
-  const handleCreatePreset = useCallback(() => {
-    // For now, just alert - this could open a modal to create a preset
-    alert('To create a preset, first add an element to the canvas, configure it, then click "Save as Preset" in the properties panel.');
-  }, []);
-
   // Handle saving an element as a preset
   const handleSaveAsPreset = useCallback(async (element: CanvasElement) => {
     const name = prompt('Enter a name for this preset:', `${element.name} Preset`);
@@ -466,6 +476,14 @@ export default function FarmLayout() {
         defaultWidth: element.width,
         defaultHeight: element.height,
         defaultColor: element.color,
+        // Include grow rack metadata in preset
+        ...(element.type === 'GROW_RACK' && element.metadata && {
+          metadata: {
+            levels: element.metadata.levels,
+            traysPerLevel: element.metadata.traysPerLevel,
+            trayCapacity: element.metadata.trayCapacity,
+          },
+        }),
       });
       alert(`Preset "${name}" saved! You can now find it in the Add Element dropdown.`);
     } catch (error) {
@@ -485,7 +503,7 @@ export default function FarmLayout() {
     );
   }
 
-  if (layoutLoading || zonesLoading || elementsLoading || prefsLoading) {
+  if (layoutLoading || elementsLoading || prefsLoading) {
     return (
       <div className="flex items-center justify-center h-[60vh]">
         <div className="animate-spin h-8 w-8 border-4 border-primary border-t-transparent rounded-full" />
@@ -517,30 +535,36 @@ export default function FarmLayout() {
           onSave={handleSave}
           isSaving={updateLayout.isPending || bulkUpdateElements.isPending}
           presets={presets}
-          onCreatePreset={handleCreatePreset}
+          onAddGrowRack={() => setGrowRackModalOpen(true)}
+          onManagePresets={() => setPresetManagerOpen(true)}
           unitSystem={unitSystem}
           onUnitChange={handleUnitChange}
         />
 
-        <div className="flex-1 flex">
+        <div className="flex-1 flex overflow-hidden">
           {/* Canvas container */}
-          <div ref={containerRef} className="flex-1">
+          <div ref={containerRef} className="flex-1 min-w-0 overflow-hidden">
             <FarmCanvas
               width={canvasSize.width}
               height={canvasSize.height}
               unitSystem={unitSystem}
-              onZoneSelect={handleZoneSelect}
+              presets={presets}
               onElementSelect={handleElementSelect}
+              onMultiSelect={handleMultiSelect}
               onOpenWallModal={handleOpenWallModal}
             />
           </div>
 
           {/* Properties panel */}
           <PropertiesPanel
-            zone={selectedZone}
             element={selectedElement}
+            selectedElements={selectedElements}
             unitSystem={unitSystem}
             onSaveAsPreset={handleSaveAsPreset}
+            onEditGrowRack={(element) => {
+              setEditingGrowRack(element);
+              setGrowRackModalOpen(true);
+            }}
           />
         </div>
       </div>
@@ -552,10 +576,14 @@ export default function FarmLayout() {
           <kbd className="px-1.5 py-0.5 bg-muted rounded text-xs">S</kbd> Select
         </span>
         <span className="inline-flex items-center gap-1">
-          <kbd className="px-1.5 py-0.5 bg-muted rounded text-xs">Z</kbd> Zone
+          <kbd className="px-1.5 py-0.5 bg-muted rounded text-xs">H</kbd> Pan
+        </span>
+        <span className="text-border">|</span>
+        <span className="inline-flex items-center gap-1">
+          <kbd className="px-1.5 py-0.5 bg-muted rounded text-xs">⌘/⇧+Click</kbd> Multi-select
         </span>
         <span className="inline-flex items-center gap-1">
-          <kbd className="px-1.5 py-0.5 bg-muted rounded text-xs">H</kbd> Pan
+          <kbd className="px-1.5 py-0.5 bg-muted rounded text-xs">Drag</kbd> Box select
         </span>
         <span className="text-border">|</span>
         <span className="inline-flex items-center gap-1">
@@ -596,6 +624,40 @@ export default function FarmLayout() {
           onWallCreated={handleElementSelect}
         />
       )}
+
+      {/* Grow Rack modal */}
+      <GrowRackModal
+        isOpen={growRackModalOpen}
+        onClose={() => {
+          setGrowRackModalOpen(false);
+          setEditingGrowRack(null);
+        }}
+        unitSystem={unitSystem}
+        editingElement={editingGrowRack}
+        position={{ x: 100, y: 100 }}
+      />
+
+      {/* Preset Manager modal */}
+      <PresetManagerModal
+        isOpen={presetManagerOpen}
+        onClose={() => setPresetManagerOpen(false)}
+        presets={presets ?? []}
+        unitSystem={unitSystem}
+        onSelectPreset={(preset) => {
+          // Set the active element type with the preset
+          const { setActiveElementType } = useCanvasStore.getState();
+          setActiveElementType(preset.type, preset.id);
+        }}
+        onCreatePreset={(data) => {
+          createPreset.mutate(data);
+        }}
+        onUpdatePreset={(presetId, data) => {
+          updatePreset.mutate({ presetId, data });
+        }}
+        onDeletePreset={(presetId) => {
+          deletePreset.mutate(presetId);
+        }}
+      />
     </div>
   );
 }

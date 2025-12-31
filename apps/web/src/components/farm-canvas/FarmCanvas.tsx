@@ -1,23 +1,24 @@
-import { useRef, useCallback, useState } from 'react';
+import { useRef, useCallback, useState, useLayoutEffect } from 'react';
 import { Stage, Layer, Rect, Line, Group, Text, Circle, Transformer } from 'react-konva';
 import type { KonvaEventObject } from 'konva/lib/Node';
+import type Konva from 'konva';
 import {
   useCanvasStore,
   snapToGridValue,
-  CanvasZone,
   CanvasElement,
   generateId,
 } from '@/stores/canvas-store';
 import { DEFAULT_ELEMENT_COLORS, DEFAULT_ELEMENT_DIMENSIONS } from '@farm/shared';
-import type { UnitSystem } from '@farm/shared';
+import type { UnitSystem, ElementPreset } from '@farm/shared';
 import { getGridSizeForUnit, getUnitLabel } from '@/lib/units';
 
 interface FarmCanvasProps {
   width: number;
   height: number;
   unitSystem?: UnitSystem;
-  onZoneSelect?: (zone: CanvasZone | null) => void;
+  presets?: ElementPreset[];
   onElementSelect?: (element: CanvasElement | null) => void;
+  onMultiSelect?: (elements: CanvasElement[]) => void;
   onOpenWallModal?: (startPoint: { x: number; y: number }) => void;
 }
 
@@ -25,30 +26,31 @@ export function FarmCanvas({
   width,
   height,
   unitSystem = 'FEET',
-  onZoneSelect,
+  presets = [],
   onElementSelect,
+  onMultiSelect,
   onOpenWallModal,
 }: FarmCanvasProps) {
-  const stageRef = useRef<any>(null);
-  const transformerRef = useRef<any>(null);
+  const stageRef = useRef<Konva.Stage>(null);
+  const transformerRef = useRef<Konva.Transformer>(null);
+  const selectedShapesRef = useRef<Map<string, Konva.Group>>(new Map());
   const {
-    zones,
     elements,
     activeTool,
     activeElementType,
     activePresetId,
-    selectedId,
+    selectedIds,
     selectedType,
     setSelectedId,
+    toggleSelection,
+    selectElementsInBounds,
+    clearSelection,
     zoom,
     setZoom,
     panOffset,
     setPanOffset,
     showGrid,
-    gridSize,
     snapToGrid,
-    addZone,
-    updateZone,
     addElement,
     updateElement,
     wallDrawing,
@@ -58,6 +60,15 @@ export function FarmCanvas({
     pushHistory,
   } = useCanvasStore();
 
+  // Marquee selection state
+  const [marquee, setMarquee] = useState<{
+    startX: number;
+    startY: number;
+    endX: number;
+    endY: number;
+  } | null>(null);
+  const [isMarqueeSelecting, setIsMarqueeSelecting] = useState(false);
+
   // Wall preview state
   const [wallPreview, setWallPreview] = useState<{
     startX: number;
@@ -66,15 +77,40 @@ export function FarmCanvas({
     endY: number;
   } | null>(null);
 
-  // Drawing state for new zones
-  const isDrawing = useRef(false);
-  const drawStart = useRef({ x: 0, y: 0 });
+  // Snap indicator state
+  const [snapIndicator, setSnapIndicator] = useState<{ x: number; y: number } | null>(null);
+
+  // Middle mouse button panning state
+  const [isMiddleMousePanning, setIsMiddleMousePanning] = useState(false);
+  const lastPanPos = useRef<{ x: number; y: number } | null>(null);
+
+  // Track when the selected shape ref changes to trigger transformer update
+  const [transformerKey, setTransformerKey] = useState(0);
+
+  // Update transformer when selection changes - use useLayoutEffect to run after ref callbacks
+  useLayoutEffect(() => {
+    if (transformerRef.current) {
+      // Get all selected non-wall shapes
+      const selectedNodes: Konva.Group[] = [];
+      for (const id of selectedIds) {
+        const node = selectedShapesRef.current.get(id);
+        const element = elements.find((e) => e.id === id);
+        // Only add non-wall elements to transformer
+        if (node && element && element.type !== 'WALL') {
+          selectedNodes.push(node);
+        }
+      }
+      transformerRef.current.nodes(selectedNodes);
+      transformerRef.current.getLayer()?.batchDraw();
+    }
+  }, [selectedIds, selectedType, transformerKey, elements]);
 
   // Get scaled pointer position
   const getScaledPos = useCallback(() => {
     const stage = stageRef.current;
     if (!stage) return { x: 0, y: 0 };
     const pos = stage.getPointerPosition();
+    if (!pos) return { x: 0, y: 0 };
     return {
       x: (pos.x - panOffset.x) / zoom,
       y: (pos.y - panOffset.y) / zoom,
@@ -84,16 +120,60 @@ export function FarmCanvas({
   // Get grid size based on unit system
   const unitGridSize = getGridSizeForUnit(unitSystem);
 
-  // Snap position to grid if enabled
+  // Find nearby wall endpoints for snapping
+  const findNearbyWallEndpoint = useCallback(
+    (pos: { x: number; y: number }, excludeId?: string): { x: number; y: number } | null => {
+      // Adjust snap distance based on zoom - larger distance when zoomed out
+      const baseSnapDistance = 25;
+      const snapDistance = baseSnapDistance / Math.max(zoom, 0.5);
+
+      let closestPoint: { x: number; y: number } | null = null;
+      let closestDist = Infinity;
+
+      for (const el of elements) {
+        if (el.type !== 'WALL' || el.id === excludeId) continue;
+
+        // Check start point
+        const startX = el.startX ?? 0;
+        const startY = el.startY ?? 0;
+        const startDist = Math.sqrt(Math.pow(pos.x - startX, 2) + Math.pow(pos.y - startY, 2));
+        if (startDist < snapDistance && startDist < closestDist) {
+          closestDist = startDist;
+          closestPoint = { x: startX, y: startY };
+        }
+
+        // Check end point
+        const endX = el.endX ?? 0;
+        const endY = el.endY ?? 0;
+        const endDist = Math.sqrt(Math.pow(pos.x - endX, 2) + Math.pow(pos.y - endY, 2));
+        if (endDist < snapDistance && endDist < closestDist) {
+          closestDist = endDist;
+          closestPoint = { x: endX, y: endY };
+        }
+      }
+
+      return closestPoint;
+    },
+    [elements, zoom]
+  );
+
+  // Snap position to grid if enabled, also snap to wall endpoints
   const snapPosition = useCallback(
-    (pos: { x: number; y: number }) => {
+    (pos: { x: number; y: number }, excludeWallId?: string) => {
+      // First try to snap to nearby wall endpoints
+      const wallSnap = findNearbyWallEndpoint(pos, excludeWallId);
+      if (wallSnap) {
+        return wallSnap;
+      }
+
+      // Otherwise snap to grid
       if (!snapToGrid) return pos;
       return {
         x: snapToGridValue(pos.x, unitGridSize),
         y: snapToGridValue(pos.y, unitGridSize),
       };
     },
-    [snapToGrid, unitGridSize]
+    [snapToGrid, unitGridSize, findNearbyWallEndpoint]
   );
 
   // Handle zoom with mouse wheel
@@ -105,6 +185,7 @@ export function FarmCanvas({
 
       const oldScale = zoom;
       const pointer = stage.getPointerPosition();
+      if (!pointer) return;
       const scaleBy = 1.1;
       const newScale = e.evt.deltaY < 0 ? oldScale * scaleBy : oldScale / scaleBy;
 
@@ -126,14 +207,18 @@ export function FarmCanvas({
   // Handle mouse down
   const handleMouseDown = useCallback(
     (e: KonvaEventObject<MouseEvent>) => {
+      // Middle mouse button (scroll wheel click) = pan
+      if (e.evt.button === 1) {
+        e.evt.preventDefault();
+        setIsMiddleMousePanning(true);
+        lastPanPos.current = { x: e.evt.clientX, y: e.evt.clientY };
+        return;
+      }
+
       const scaledPos = getScaledPos();
       const snappedPos = snapPosition(scaledPos);
 
-      if (activeTool === 'zone') {
-        // Zone drawing
-        isDrawing.current = true;
-        drawStart.current = snappedPos;
-      } else if (activeTool === 'wall') {
+      if (activeTool === 'wall') {
         // Wall drawing - first click sets start point
         if (!wallDrawing.startPoint) {
           setWallStartPoint(snappedPos);
@@ -146,23 +231,26 @@ export function FarmCanvas({
           });
         }
       } else if (activeTool === 'element' && activeElementType && activeElementType !== 'WALL') {
-        // Place rectangle element
+        // Place rectangle element - use preset data if available
+        const activePreset = activePresetId ? presets.find((p) => p.id === activePresetId) : null;
         const defaults =
           DEFAULT_ELEMENT_DIMENSIONS[activeElementType as keyof typeof DEFAULT_ELEMENT_DIMENSIONS] ||
           {};
-        const defaultWidth = 'width' in defaults ? defaults.width : 100;
-        const defaultHeight = 'height' in defaults ? defaults.height : 60;
+        const defaultWidth = activePreset?.defaultWidth ?? ('width' in defaults ? defaults.width : 100);
+        const defaultHeight = activePreset?.defaultHeight ?? ('height' in defaults ? defaults.height : 60);
+        const defaultColor = activePreset?.defaultColor ?? DEFAULT_ELEMENT_COLORS[activeElementType as keyof typeof DEFAULT_ELEMENT_COLORS] ?? '#666666';
+        const elementName = activePreset?.name ?? `${activeElementType.replace('_', ' ')} ${elements.length + 1}`;
 
         const newElement: CanvasElement = {
           id: generateId('el'),
-          name: `${activeElementType.replace('_', ' ')} ${elements.length + 1}`,
+          name: elementName,
           type: activeElementType,
           x: snappedPos.x,
           y: snappedPos.y,
           width: defaultWidth,
           height: defaultHeight,
           rotation: 0,
-          color: DEFAULT_ELEMENT_COLORS[activeElementType as keyof typeof DEFAULT_ELEMENT_COLORS] || '#666666',
+          color: defaultColor,
           opacity: 1,
           presetId: activePresetId ?? undefined,
         };
@@ -173,9 +261,23 @@ export function FarmCanvas({
         // Check if clicked on empty space
         const clickedOnEmpty = e.target === e.target.getStage();
         if (clickedOnEmpty) {
-          setSelectedId(null);
-          onZoneSelect?.(null);
-          onElementSelect?.(null);
+          const hasModifier = e.evt.shiftKey || e.evt.metaKey || e.evt.ctrlKey;
+
+          // If no modifier key, clear selection and start marquee
+          if (!hasModifier) {
+            clearSelection();
+            onElementSelect?.(null);
+            onMultiSelect?.([]);
+          }
+
+          // Start marquee selection
+          setIsMarqueeSelecting(true);
+          setMarquee({
+            startX: scaledPos.x,
+            startY: scaledPos.y,
+            endX: scaledPos.x,
+            endY: scaledPos.y,
+          });
         }
       }
     },
@@ -189,55 +291,116 @@ export function FarmCanvas({
       snapPosition,
       addElement,
       setSelectedId,
+      clearSelection,
       setWallStartPoint,
       setWallIsDrawing,
-      onZoneSelect,
       onElementSelect,
+      onMultiSelect,
+      presets,
     ]
   );
 
   // Handle mouse move
-  const handleMouseMove = useCallback(() => {
-    if (activeTool === 'wall' && wallDrawing.startPoint && wallDrawing.isDrawing) {
-      const scaledPos = getScaledPos();
-      const snappedPos = snapPosition(scaledPos);
-      setWallPreview({
-        startX: wallDrawing.startPoint.x,
-        startY: wallDrawing.startPoint.y,
-        endX: snappedPos.x,
-        endY: snappedPos.y,
-      });
-    }
-  }, [activeTool, wallDrawing, getScaledPos, snapPosition]);
+  const handleMouseMove = useCallback(
+    (e: KonvaEventObject<MouseEvent>) => {
+      // Handle middle mouse button panning
+      if (isMiddleMousePanning && lastPanPos.current) {
+        const dx = e.evt.clientX - lastPanPos.current.x;
+        const dy = e.evt.clientY - lastPanPos.current.y;
+        setPanOffset({
+          x: panOffset.x + dx,
+          y: panOffset.y + dy,
+        });
+        lastPanPos.current = { x: e.evt.clientX, y: e.evt.clientY };
+        return;
+      }
+
+      // Handle marquee selection
+      if (isMarqueeSelecting && marquee) {
+        const scaledPos = getScaledPos();
+        setMarquee({
+          ...marquee,
+          endX: scaledPos.x,
+          endY: scaledPos.y,
+        });
+        return;
+      }
+
+      if (activeTool === 'wall' && wallDrawing.startPoint && wallDrawing.isDrawing) {
+        const scaledPos = getScaledPos();
+        const snappedPos = snapPosition(scaledPos);
+
+        // Check if we're snapping to a wall endpoint
+        const wallSnap = findNearbyWallEndpoint(scaledPos);
+        setSnapIndicator(wallSnap);
+
+        setWallPreview({
+          startX: wallDrawing.startPoint.x,
+          startY: wallDrawing.startPoint.y,
+          endX: snappedPos.x,
+          endY: snappedPos.y,
+        });
+      } else {
+        setSnapIndicator(null);
+      }
+    },
+    [activeTool, wallDrawing, getScaledPos, snapPosition, findNearbyWallEndpoint, isMiddleMousePanning, panOffset, setPanOffset, isMarqueeSelecting, marquee]
+  );
 
   // Handle mouse up
   const handleMouseUp = useCallback(
     (e: KonvaEventObject<MouseEvent>) => {
-      if (activeTool === 'zone' && isDrawing.current) {
-        const scaledPos = getScaledPos();
-        const endPos = snapPosition(scaledPos);
+      // Stop middle mouse panning
+      if (e.evt.button === 1 || isMiddleMousePanning) {
+        setIsMiddleMousePanning(false);
+        lastPanPos.current = null;
+        if (e.evt.button === 1) return;
+      }
 
-        const newWidth = Math.abs(endPos.x - drawStart.current.x);
-        const newHeight = Math.abs(endPos.y - drawStart.current.y);
+      // Complete marquee selection
+      if (isMarqueeSelecting && marquee) {
+        setIsMarqueeSelecting(false);
 
-        if (newWidth > 20 && newHeight > 20) {
-          const newZone: CanvasZone = {
-            id: `zone-${Date.now()}`,
-            name: `Zone ${zones.length + 1}`,
-            type: 'FIELD',
-            color: '#4CAF50',
-            x: Math.min(drawStart.current.x, endPos.x),
-            y: Math.min(drawStart.current.y, endPos.y),
-            width: newWidth,
-            height: newHeight,
-          };
-          addZone(newZone);
-          setSelectedId(newZone.id, 'zone');
-          onZoneSelect?.(newZone);
+        // Calculate normalized bounds (handle negative width/height)
+        const x = Math.min(marquee.startX, marquee.endX);
+        const y = Math.min(marquee.startY, marquee.endY);
+        const width = Math.abs(marquee.endX - marquee.startX);
+        const height = Math.abs(marquee.endY - marquee.startY);
+
+        // Only select if the marquee has some size
+        if (width > 5 || height > 5) {
+          selectElementsInBounds({ x, y, width, height });
+          // Notify parent of multi-selection
+          const selectedElements = elements.filter((el) => {
+            if (el.type === 'WALL') {
+              const startInBounds =
+                (el.startX ?? 0) >= x && (el.startX ?? 0) <= x + width &&
+                (el.startY ?? 0) >= y && (el.startY ?? 0) <= y + height;
+              const endInBounds =
+                (el.endX ?? 0) >= x && (el.endX ?? 0) <= x + width &&
+                (el.endY ?? 0) >= y && (el.endY ?? 0) <= y + height;
+              return startInBounds || endInBounds;
+            } else {
+              const elX = el.x ?? 0;
+              const elY = el.y ?? 0;
+              const elW = el.width ?? 0;
+              const elH = el.height ?? 0;
+              return elX < x + width && elX + elW > x && elY < y + height && elY + elH > y;
+            }
+          });
+          if (selectedElements.length > 0) {
+            onMultiSelect?.(selectedElements);
+            if (selectedElements.length === 1) {
+              onElementSelect?.(selectedElements[0]);
+            }
+          }
         }
 
-        isDrawing.current = false;
-      } else if (activeTool === 'wall' && wallDrawing.startPoint && wallDrawing.isDrawing) {
+        setMarquee(null);
+        return;
+      }
+
+      if (activeTool === 'wall' && wallDrawing.startPoint && wallDrawing.isDrawing) {
         // Wall drawing - second click sets end point
         const scaledPos = getScaledPos();
         const endPos = snapPosition(scaledPos);
@@ -268,21 +431,24 @@ export function FarmCanvas({
 
         resetWallDrawing();
         setWallPreview(null);
+        setSnapIndicator(null);
       }
     },
     [
       activeTool,
-      zones.length,
       elements,
       wallDrawing,
       getScaledPos,
       snapPosition,
-      addZone,
       addElement,
       setSelectedId,
       resetWallDrawing,
-      onZoneSelect,
       onElementSelect,
+      onMultiSelect,
+      isMiddleMousePanning,
+      isMarqueeSelecting,
+      marquee,
+      selectElementsInBounds,
     ]
   );
 
@@ -293,28 +459,41 @@ export function FarmCanvas({
     }
   }, [activeTool, wallDrawing.startPoint, onOpenWallModal]);
 
-  // Handle zone click
-  const handleZoneClick = useCallback(
-    (zone: CanvasZone) => {
-      if (activeTool === 'select') {
-        setSelectedId(zone.id, 'zone');
-        onZoneSelect?.(zone);
-        onElementSelect?.(null);
-      }
-    },
-    [activeTool, setSelectedId, onZoneSelect, onElementSelect]
-  );
-
-  // Handle element click
+  // Handle element click - supports Cmd/Shift for multi-select
   const handleElementClick = useCallback(
-    (element: CanvasElement) => {
+    (element: CanvasElement, e: KonvaEventObject<MouseEvent>) => {
       if (activeTool === 'select') {
-        setSelectedId(element.id, 'element');
-        onElementSelect?.(element);
-        onZoneSelect?.(null);
+        const hasModifier = e.evt.shiftKey || e.evt.metaKey || e.evt.ctrlKey;
+
+        if (hasModifier) {
+          // Toggle selection with modifier key
+          toggleSelection(element.id, 'element');
+          // Notify parent - get updated selection
+          const willBeSelected = !selectedIds.includes(element.id);
+          if (willBeSelected) {
+            const newSelectedElements = [...elements.filter((el) => selectedIds.includes(el.id)), element];
+            onMultiSelect?.(newSelectedElements);
+          } else {
+            const newSelectedElements = elements.filter(
+              (el) => selectedIds.includes(el.id) && el.id !== element.id
+            );
+            onMultiSelect?.(newSelectedElements);
+            if (newSelectedElements.length === 1) {
+              onElementSelect?.(newSelectedElements[0]);
+            } else if (newSelectedElements.length === 0) {
+              onElementSelect?.(null);
+            }
+          }
+        } else {
+          // Single select without modifier
+          setSelectedId(element.id, 'element');
+          onElementSelect?.(element);
+        }
+        // Trigger transformer update after ref is set by render
+        setTransformerKey((k) => k + 1);
       }
     },
-    [activeTool, setSelectedId, onElementSelect, onZoneSelect]
+    [activeTool, setSelectedId, toggleSelection, selectedIds, elements, onElementSelect, onMultiSelect]
   );
 
   // Handle drag start - push history so we can undo
@@ -322,23 +501,7 @@ export function FarmCanvas({
     pushHistory();
   }, [pushHistory]);
 
-  // Handle zone drag
-  const handleZoneDragEnd = useCallback(
-    (zone: CanvasZone, e: KonvaEventObject<DragEvent>) => {
-      let newX = e.target.x();
-      let newY = e.target.y();
-
-      if (snapToGrid) {
-        newX = snapToGridValue(newX, unitGridSize);
-        newY = snapToGridValue(newY, unitGridSize);
-      }
-
-      updateZone(zone.id, { x: newX, y: newY });
-    },
-    [snapToGrid, unitGridSize, updateZone]
-  );
-
-  // Handle element drag
+  // Handle element drag (for non-wall elements like tables, sinks, etc.)
   const handleElementDragEnd = useCallback(
     (element: CanvasElement, e: KonvaEventObject<DragEvent>) => {
       let newX = e.target.x();
@@ -349,56 +512,12 @@ export function FarmCanvas({
         newY = snapToGridValue(newY, unitGridSize);
       }
 
-      if (element.type === 'WALL') {
-        // For walls, update start/end points
-        const dx = newX - (element.startX ?? 0);
-        const dy = newY - (element.startY ?? 0);
-        updateElement(element.id, {
-          startX: newX,
-          startY: newY,
-          endX: (element.endX ?? 0) + dx,
-          endY: (element.endY ?? 0) + dy,
-        });
-      } else {
-        updateElement(element.id, { x: newX, y: newY });
-      }
+      updateElement(element.id, { x: newX, y: newY });
     },
     [snapToGrid, unitGridSize, updateElement]
   );
 
-  // Handle zone transform (resize)
-  const handleZoneTransformEnd = useCallback(
-    (zone: CanvasZone, e: KonvaEventObject<Event>) => {
-      const node = e.target;
-      const scaleX = node.scaleX();
-      const scaleY = node.scaleY();
-
-      node.scaleX(1);
-      node.scaleY(1);
-
-      let newWidth = Math.max(20, node.width() * scaleX);
-      let newHeight = Math.max(20, node.height() * scaleY);
-      let newX = node.x();
-      let newY = node.y();
-
-      if (snapToGrid) {
-        newWidth = snapToGridValue(newWidth, unitGridSize);
-        newHeight = snapToGridValue(newHeight, unitGridSize);
-        newX = snapToGridValue(newX, unitGridSize);
-        newY = snapToGridValue(newY, unitGridSize);
-      }
-
-      updateZone(zone.id, {
-        x: newX,
-        y: newY,
-        width: newWidth,
-        height: newHeight,
-      });
-    },
-    [snapToGrid, unitGridSize, updateZone]
-  );
-
-  // Handle element transform (resize)
+  // Handle element transform (resize/rotate)
   const handleElementTransformEnd = useCallback(
     (element: CanvasElement, e: KonvaEventObject<Event>) => {
       const node = e.target;
@@ -439,23 +558,23 @@ export function FarmCanvas({
     const gridUnit = getGridSizeForUnit(unitSystem);
     const unitLabel = getUnitLabel(unitSystem);
 
-    // Calculate visible area in world coordinates
-    const visibleLeft = -panOffset.x / zoom;
-    const visibleTop = -panOffset.y / zoom;
-    const visibleRight = visibleLeft + width / zoom;
-    const visibleBottom = visibleTop + height / zoom;
+    // Calculate the full visible canvas area in world coordinates
+    const canvasLeft = -panOffset.x / zoom;
+    const canvasTop = -panOffset.y / zoom;
+    const canvasRight = canvasLeft + width / zoom;
+    const canvasBottom = canvasTop + height / zoom;
 
-    // Add some padding to ensure lines are drawn beyond visible area
-    const padding = gridUnit * 2;
-    const startX = Math.floor((visibleLeft - padding) / gridUnit) * gridUnit;
-    const startY = Math.floor((visibleTop - padding) / gridUnit) * gridUnit;
-    const endX = Math.ceil((visibleRight + padding) / gridUnit) * gridUnit;
-    const endY = Math.ceil((visibleBottom + padding) / gridUnit) * gridUnit;
+    // Add small buffer to ensure edges are covered
+    const buffer = gridUnit * 2;
+    const startX = Math.floor((canvasLeft - buffer) / gridUnit) * gridUnit;
+    const startY = Math.floor((canvasTop - buffer) / gridUnit) * gridUnit;
+    const endX = Math.ceil((canvasRight + buffer) / gridUnit) * gridUnit;
+    const endY = Math.ceil((canvasBottom + buffer) / gridUnit) * gridUnit;
 
-    // Limit number of lines to prevent performance issues
-    const maxLines = 200;
-    const numVerticalLines = Math.min((endX - startX) / gridUnit, maxLines);
-    const numHorizontalLines = Math.min((endY - startY) / gridUnit, maxLines);
+    // Limit lines to prevent performance issues
+    const maxLines = 150;
+    const numVerticalLines = Math.min(Math.ceil((endX - startX) / gridUnit), maxLines);
+    const numHorizontalLines = Math.min(Math.ceil((endY - startY) / gridUnit), maxLines);
 
     // Draw vertical lines
     for (let i = 0; i <= numVerticalLines; i++) {
@@ -486,8 +605,8 @@ export function FarmCanvas({
     }
 
     // Add scale indicator (fixed position relative to viewport)
-    const scaleX = visibleLeft + 20;
-    const scaleY = visibleBottom - 40;
+    const scaleX = canvasLeft + 20;
+    const scaleY = canvasBottom - 40;
     lines.push(
       <Group key="scale-indicator" x={scaleX} y={scaleY}>
         {/* Background for better visibility */}
@@ -528,38 +647,47 @@ export function FarmCanvas({
     return lines;
   };
 
-  // Handle wall endpoint drag
-  const handleWallEndpointDrag = useCallback(
-    (element: CanvasElement, endpoint: 'start' | 'end', e: KonvaEventObject<DragEvent>) => {
-      const node = e.target;
-      let newX = node.x();
-      let newY = node.y();
+  // Handle wall drag (whole wall movement)
+  const handleWallDrag = useCallback(
+    (element: CanvasElement, e: KonvaEventObject<DragEvent>) => {
+      // Get the delta movement from the drag (Line's position relative to Group)
+      const dx = e.target.x();
+      const dy = e.target.y();
 
+      // Always reset the dragged element's position first
+      e.target.x(0);
+      e.target.y(0);
+
+      // Skip if no actual movement
+      if (dx === 0 && dy === 0) return;
+
+      // Get current positions - ensure they're numbers
+      const currentStartX = typeof element.startX === 'number' ? element.startX : 0;
+      const currentStartY = typeof element.startY === 'number' ? element.startY : 0;
+      const currentEndX = typeof element.endX === 'number' ? element.endX : 0;
+      const currentEndY = typeof element.endY === 'number' ? element.endY : 0;
+
+      let newStartX = currentStartX + dx;
+      let newStartY = currentStartY + dy;
+
+      // Apply grid snapping if enabled
       if (snapToGrid) {
-        newX = snapToGridValue(newX, unitGridSize);
-        newY = snapToGridValue(newY, unitGridSize);
+        newStartX = snapToGridValue(newStartX, unitGridSize);
+        newStartY = snapToGridValue(newStartY, unitGridSize);
       }
 
-      // Convert from local group coordinates to absolute
-      const startX = element.startX ?? 0;
-      const startY = element.startY ?? 0;
+      // Calculate actual delta after snapping
+      const actualDx = newStartX - currentStartX;
+      const actualDy = newStartY - currentStartY;
 
-      if (endpoint === 'start') {
+      // Only update if there's actual movement after snapping
+      if (actualDx !== 0 || actualDy !== 0) {
         updateElement(element.id, {
-          startX: startX + newX,
-          startY: startY + newY,
+          startX: newStartX,
+          startY: newStartY,
+          endX: currentEndX + actualDx,
+          endY: currentEndY + actualDy,
         });
-        // Reset the node position since we're updating the group
-        node.x(0);
-        node.y(0);
-      } else {
-        updateElement(element.id, {
-          endX: startX + newX,
-          endY: startY + newY,
-        });
-        // Keep relative position for end point
-        node.x(newX);
-        node.y(newY);
       }
     },
     [snapToGrid, unitGridSize, updateElement]
@@ -567,20 +695,29 @@ export function FarmCanvas({
 
   // Render wall element
   const renderWall = (element: CanvasElement) => {
-    const isSelected = selectedId === element.id && selectedType === 'element';
+    const isSelected = selectedIds.includes(element.id) && selectedType === 'element';
     const thickness = element.thickness ?? 10;
-    const relEndX = (element.endX ?? 0) - (element.startX ?? 0);
-    const relEndY = (element.endY ?? 0) - (element.startY ?? 0);
+
+    // Ensure coordinates are numbers (walls loaded from API might have null/undefined)
+    const startX = typeof element.startX === 'number' ? element.startX : 0;
+    const startY = typeof element.startY === 'number' ? element.startY : 0;
+    const endX = typeof element.endX === 'number' ? element.endX : 0;
+    const endY = typeof element.endY === 'number' ? element.endY : 0;
+
+    const relEndX = endX - startX;
+    const relEndY = endY - startY;
 
     return (
       <Group
         key={element.id}
-        x={element.startX ?? 0}
-        y={element.startY ?? 0}
-        draggable={activeTool === 'select' && !isSelected}
-        onClick={() => handleElementClick(element)}
-        onDragStart={handleDragStart}
-        onDragEnd={(e) => handleElementDragEnd(element, e)}
+        x={startX}
+        y={startY}
+        draggable={false}
+        onMouseDown={(e) => {
+          // Stop propagation to prevent Stage from handling this click
+          e.cancelBubble = true;
+        }}
+        onClick={(e) => handleElementClick(element, e)}
       >
         <Line
           points={[0, 0, relEndX, relEndY]}
@@ -590,23 +727,9 @@ export function FarmCanvas({
           lineCap="round"
           lineJoin="round"
           hitStrokeWidth={Math.max(thickness, 20)}
-          draggable={activeTool === 'select' && isSelected}
+          draggable={activeTool === 'select'}
           onDragStart={handleDragStart}
-          onDragEnd={(e) => {
-            // When line itself is dragged, move the whole wall
-            const dx = e.target.x();
-            const dy = e.target.y();
-            if (dx !== 0 || dy !== 0) {
-              updateElement(element.id, {
-                startX: (element.startX ?? 0) + dx,
-                startY: (element.startY ?? 0) + dy,
-                endX: (element.endX ?? 0) + dx,
-                endY: (element.endY ?? 0) + dy,
-              });
-              e.target.x(0);
-              e.target.y(0);
-            }
-          }}
+          onDragEnd={(e) => handleWallDrag(element, e)}
         />
         {/* Draggable endpoint handles when selected */}
         {isSelected && (
@@ -622,31 +745,25 @@ export function FarmCanvas({
               draggable
               onDragStart={handleDragStart}
               onDragMove={(e) => {
-                // Real-time update during drag
+                // Real-time update during drag with wall snapping
                 const node = e.target;
-                let newX = node.x();
-                let newY = node.y();
-                if (snapToGrid) {
-                  newX = snapToGridValue(newX, unitGridSize);
-                  newY = snapToGridValue(newY, unitGridSize);
-                  node.x(newX);
-                  node.y(newY);
-                }
+                const worldPos = { x: startX + node.x(), y: startY + node.y() };
+                const snapped = snapPosition(worldPos, element.id);
+                node.x(snapped.x - startX);
+                node.y(snapped.y - startY);
               }}
               onDragEnd={(e) => {
                 const node = e.target;
-                let newX = node.x();
-                let newY = node.y();
-                if (snapToGrid) {
-                  newX = snapToGridValue(newX, unitGridSize);
-                  newY = snapToGridValue(newY, unitGridSize);
-                }
-                const startX = element.startX ?? 0;
-                const startY = element.startY ?? 0;
+                const worldPos = { x: startX + node.x(), y: startY + node.y() };
+                const snapped = snapPosition(worldPos, element.id);
+
+                // Update the element
                 updateElement(element.id, {
-                  startX: startX + newX,
-                  startY: startY + newY,
+                  startX: snapped.x,
+                  startY: snapped.y,
                 });
+
+                // Reset handle to origin (start point is always at 0,0 relative to group)
                 node.x(0);
                 node.y(0);
               }}
@@ -670,31 +787,27 @@ export function FarmCanvas({
               draggable
               onDragStart={handleDragStart}
               onDragMove={(e) => {
-                // Real-time update during drag
+                // Real-time update during drag with wall snapping
                 const node = e.target;
-                let newX = node.x();
-                let newY = node.y();
-                if (snapToGrid) {
-                  newX = snapToGridValue(newX, unitGridSize);
-                  newY = snapToGridValue(newY, unitGridSize);
-                  node.x(newX);
-                  node.y(newY);
-                }
+                const worldPos = { x: startX + node.x(), y: startY + node.y() };
+                const snapped = snapPosition(worldPos, element.id);
+                node.x(snapped.x - startX);
+                node.y(snapped.y - startY);
               }}
               onDragEnd={(e) => {
                 const node = e.target;
-                let newX = node.x();
-                let newY = node.y();
-                if (snapToGrid) {
-                  newX = snapToGridValue(newX, unitGridSize);
-                  newY = snapToGridValue(newY, unitGridSize);
-                }
-                const startX = element.startX ?? 0;
-                const startY = element.startY ?? 0;
+                const worldPos = { x: startX + node.x(), y: startY + node.y() };
+                const snapped = snapPosition(worldPos, element.id);
+
+                // Update the element
                 updateElement(element.id, {
-                  endX: startX + newX,
-                  endY: startY + newY,
+                  endX: snapped.x,
+                  endY: snapped.y,
                 });
+
+                // Reset handle to new relative position
+                node.x(snapped.x - startX);
+                node.y(snapped.y - startY);
               }}
               onMouseEnter={(e) => {
                 const container = e.target.getStage()?.container();
@@ -711,52 +824,146 @@ export function FarmCanvas({
     );
   };
 
-  // Render rectangle element (sink, table, grow rack, custom)
+  // Render rectangle element (sink, table, grow rack, walkway, circle, custom)
   const renderRectElement = (element: CanvasElement) => {
-    const isSelected = selectedId === element.id && selectedType === 'element';
+    const isSelected = selectedIds.includes(element.id) && selectedType === 'element';
+    const isGrowRack = element.type === 'GROW_RACK';
+    const isCircle = element.type === 'CIRCLE';
+    const trayCapacity = element.metadata?.trayCapacity ?? 0;
+    const levels = element.metadata?.levels ?? 1;
+    const elementWidth = element.width ?? 100;
+    const elementHeight = element.height ?? 60;
 
     return (
       <Group
         key={element.id}
         x={element.x ?? 0}
         y={element.y ?? 0}
+        width={elementWidth}
+        height={elementHeight}
         rotation={element.rotation ?? 0}
         draggable={activeTool === 'select'}
-        onClick={() => handleElementClick(element)}
+        ref={(node) => {
+          // Store ref in map for multi-select transformer support
+          if (node) {
+            selectedShapesRef.current.set(element.id, node);
+          } else {
+            selectedShapesRef.current.delete(element.id);
+          }
+        }}
+        onMouseDown={(e) => {
+          // Stop propagation to prevent Stage from handling this click
+          e.cancelBubble = true;
+        }}
+        onClick={(e) => handleElementClick(element, e)}
         onDragStart={handleDragStart}
         onDragEnd={(e) => handleElementDragEnd(element, e)}
         onTransformEnd={(e) => handleElementTransformEnd(element, e)}
       >
-        <Rect
-          width={element.width ?? 100}
-          height={element.height ?? 60}
-          fill={element.color}
-          opacity={element.opacity}
-          stroke={isSelected ? '#2563eb' : '#333'}
-          strokeWidth={isSelected ? 3 : 1}
-          cornerRadius={4}
-        />
+        {/* Shape - Circle or Rectangle */}
+        {isCircle ? (
+          <Circle
+            x={elementWidth / 2}
+            y={elementHeight / 2}
+            radius={Math.min(elementWidth, elementHeight) / 2}
+            fill={element.color}
+            opacity={element.opacity}
+            stroke={isSelected ? '#2563eb' : '#333'}
+            strokeWidth={isSelected ? 3 : 1}
+          />
+        ) : (
+          <Rect
+            width={elementWidth}
+            height={elementHeight}
+            fill={element.color}
+            opacity={element.opacity}
+            stroke={isSelected ? '#2563eb' : '#333'}
+            strokeWidth={isSelected ? 3 : 1}
+            cornerRadius={element.type === 'WALKWAY' ? 2 : 4}
+          />
+        )}
+        {/* Element name - clipped to element width */}
         <Text
           text={element.name}
           x={4}
           y={4}
-          fontSize={12}
+          width={elementWidth - 8}
+          fontSize={Math.min(12, elementHeight / 3)}
           fontStyle="bold"
           fill="#fff"
           shadowColor="#000"
           shadowBlur={2}
           shadowOpacity={0.5}
+          ellipsis={true}
         />
+        {/* Grow rack specific: show levels and capacity */}
+        {isGrowRack && (
+          <>
+            {/* Level indicator lines */}
+            {levels > 1 && Array.from({ length: levels - 1 }).map((_, i) => (
+              <Line
+                key={`level-${i}`}
+                points={[
+                  4,
+                  (elementHeight / levels) * (i + 1),
+                  elementWidth - 4,
+                  (elementHeight / levels) * (i + 1),
+                ]}
+                stroke="rgba(255,255,255,0.4)"
+                strokeWidth={1}
+                dash={[4, 2]}
+              />
+            ))}
+            {/* Capacity badge */}
+            <Group x={elementWidth - 4} y={elementHeight - 4}>
+              <Rect
+                x={-40}
+                y={-18}
+                width={40}
+                height={18}
+                fill="rgba(0,0,0,0.7)"
+                cornerRadius={3}
+              />
+              <Text
+                text={`${trayCapacity} 🌱`}
+                x={-38}
+                y={-15}
+                fontSize={11}
+                fill="#fff"
+              />
+            </Group>
+            {/* Levels badge (top right) */}
+            {levels > 1 && (
+              <Group x={elementWidth - 4} y={4}>
+                <Rect
+                  x={-28}
+                  y={0}
+                  width={28}
+                  height={16}
+                  fill="rgba(0,0,0,0.6)"
+                  cornerRadius={3}
+                />
+                <Text
+                  text={`${levels}L`}
+                  x={-24}
+                  y={2}
+                  fontSize={10}
+                  fill="#fff"
+                />
+              </Group>
+            )}
+          </>
+        )}
       </Group>
     );
   };
 
   // Cursor style based on active tool
   const getCursor = () => {
+    if (isMiddleMousePanning) return 'grabbing';
     switch (activeTool) {
       case 'pan':
         return 'grab';
-      case 'zone':
       case 'wall':
       case 'element':
         return 'crosshair';
@@ -779,64 +986,47 @@ export function FarmCanvas({
       onMouseMove={handleMouseMove}
       onMouseUp={handleMouseUp}
       onDblClick={handleDoubleClick}
+      onContextMenu={(e) => e.evt.preventDefault()}
       style={{ backgroundColor: '#f5f5f5', cursor: getCursor() }}
     >
-      {/* Grid layer */}
-      <Layer>
+      {/* Grid layer - non-listening so clicks pass through to stage */}
+      <Layer listening={false}>
         {renderGrid()}
-      </Layer>
-
-      {/* Zones layer */}
-      <Layer>
-        {zones.map((zone) => (
-          <Group
-            key={zone.id}
-            x={zone.x}
-            y={zone.y}
-            draggable={activeTool === 'select'}
-            onClick={() => handleZoneClick(zone)}
-            onDragStart={handleDragStart}
-            onDragEnd={(e) => handleZoneDragEnd(zone, e)}
-            onTransformEnd={(e) => handleZoneTransformEnd(zone, e)}
-          >
-            <Rect
-              width={zone.width}
-              height={zone.height}
-              fill={zone.color}
-              opacity={0.6}
-              stroke={selectedId === zone.id && selectedType === 'zone' ? '#2563eb' : '#333'}
-              strokeWidth={selectedId === zone.id && selectedType === 'zone' ? 3 : 1}
-              cornerRadius={4}
-            />
-            <Text
-              text={zone.name}
-              x={8}
-              y={8}
-              fontSize={14}
-              fontStyle="bold"
-              fill="#fff"
-              shadowColor="#000"
-              shadowBlur={2}
-              shadowOpacity={0.5}
-            />
-            <Text
-              text={zone.type}
-              x={8}
-              y={26}
-              fontSize={11}
-              fill="#fff"
-              shadowColor="#000"
-              shadowBlur={2}
-              shadowOpacity={0.5}
-            />
-          </Group>
-        ))}
       </Layer>
 
       {/* Elements layer */}
       <Layer>
         {elements.map((element) =>
           element.type === 'WALL' ? renderWall(element) : renderRectElement(element)
+        )}
+        {/* Transformer for resize/rotate - only for non-wall elements */}
+        {selectedIds.length > 0 && selectedType === 'element' && selectedIds.some(id => {
+          const el = elements.find(e => e.id === id);
+          return el && el.type !== 'WALL';
+        }) && (
+          <Transformer
+            ref={transformerRef}
+            rotateEnabled={selectedIds.length === 1}
+            enabledAnchors={selectedIds.length === 1
+              ? ['top-left', 'top-right', 'bottom-left', 'bottom-right', 'middle-left', 'middle-right', 'top-center', 'bottom-center']
+              : ['top-left', 'top-right', 'bottom-left', 'bottom-right']
+            }
+            boundBoxFunc={(oldBox, newBox) => {
+              // Limit minimum size
+              if (newBox.width < 20 || newBox.height < 20) {
+                return oldBox;
+              }
+              return newBox;
+            }}
+            anchorSize={10}
+            anchorCornerRadius={2}
+            borderStroke="#2563eb"
+            borderStrokeWidth={2}
+            anchorStroke="#2563eb"
+            anchorFill="#fff"
+            rotateAnchorOffset={25}
+            rotationSnaps={[0, 45, 90, 135, 180, 225, 270, 315]}
+          />
         )}
       </Layer>
 
@@ -866,6 +1056,38 @@ export function FarmCanvas({
             fill="#2563eb"
             stroke="#fff"
             strokeWidth={2}
+          />
+        )}
+        {/* Snap indicator - shows when snapping to wall endpoint */}
+        {snapIndicator && (
+          <>
+            <Circle
+              x={snapIndicator.x}
+              y={snapIndicator.y}
+              radius={12}
+              stroke="#22c55e"
+              strokeWidth={3}
+              fill="transparent"
+            />
+            <Circle
+              x={snapIndicator.x}
+              y={snapIndicator.y}
+              radius={4}
+              fill="#22c55e"
+            />
+          </>
+        )}
+        {/* Marquee selection rectangle */}
+        {marquee && isMarqueeSelecting && (
+          <Rect
+            x={Math.min(marquee.startX, marquee.endX)}
+            y={Math.min(marquee.startY, marquee.endY)}
+            width={Math.abs(marquee.endX - marquee.startX)}
+            height={Math.abs(marquee.endY - marquee.startY)}
+            fill="rgba(37, 99, 235, 0.1)"
+            stroke="#2563eb"
+            strokeWidth={1}
+            dash={[5, 5]}
           />
         )}
       </Layer>

@@ -34,7 +34,8 @@ interface CanvasToolbarProps {
   onSave?: () => void;
   isSaving?: boolean;
   presets?: ElementPreset[];
-  onCreatePreset?: () => void;
+  onAddGrowRack?: () => void;
+  onManagePresets?: () => void;
   unitSystem?: UnitSystem;
   onUnitChange?: (unit: UnitSystem) => void;
 }
@@ -43,7 +44,8 @@ export function CanvasToolbar({
   onSave,
   isSaving,
   presets,
-  onCreatePreset,
+  onAddGrowRack,
+  onManagePresets,
   unitSystem = 'FEET',
   onUnitChange,
 }: CanvasToolbarProps) {
@@ -70,21 +72,10 @@ export function CanvasToolbar({
           tool="select"
           label="Select"
           shortcut="S"
-          description="Click to select and move elements. Drag corners to resize."
+          description="Click to select, move, resize, or rotate elements."
           icon={
             <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 15l-2 5L9 9l11 4-5 2zm0 0l5 5M7.188 2.239l.777 2.897M5.136 7.965l-2.898-.777M13.95 4.05l-2.122 2.122m-5.657 5.656l-2.12 2.122" />
-            </svg>
-          }
-        />
-        <ToolButton
-          tool="zone"
-          label="Draw Zone"
-          shortcut="Z"
-          description="Click and drag to create a new zone area."
-          icon={
-            <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 5a1 1 0 011-1h14a1 1 0 011 1v2a1 1 0 01-1 1H5a1 1 0 01-1-1V5zM4 13a1 1 0 011-1h6a1 1 0 011 1v6a1 1 0 01-1 1H5a1 1 0 01-1-1v-6zM16 13a1 1 0 011-1h2a1 1 0 011 1v6a1 1 0 01-1 1h-2a1 1 0 01-1-1v-6z" />
             </svg>
           }
         />
@@ -103,7 +94,11 @@ export function CanvasToolbar({
         <div className="w-px h-6 bg-border mx-2" />
 
         {/* Add Element Dropdown */}
-        <AddElementDropdown presets={presets} onCreatePreset={onCreatePreset} />
+        <AddElementDropdown
+          presets={presets}
+          onAddGrowRack={onAddGrowRack}
+          onManagePresets={onManagePresets}
+        />
 
         <div className="w-px h-6 bg-border mx-2" />
 
@@ -134,19 +129,25 @@ export function CanvasToolbar({
       <div className="flex items-center gap-2">
         <button
           onClick={toggleGrid}
-          className={`px-3 py-1.5 rounded-md text-sm ${
-            showGrid ? 'bg-secondary' : 'hover:bg-muted'
+          className={`px-3 py-1.5 rounded-md text-sm transition-colors ${
+            showGrid
+              ? 'bg-primary/20 text-primary border border-primary/30'
+              : 'hover:bg-muted border border-transparent'
           }`}
+          title={showGrid ? 'Grid visible (click to hide)' : 'Grid hidden (click to show)'}
         >
-          Grid
+          Grid {showGrid ? '✓' : ''}
         </button>
         <button
           onClick={toggleSnapToGrid}
-          className={`px-3 py-1.5 rounded-md text-sm ${
-            snapToGrid ? 'bg-secondary' : 'hover:bg-muted'
+          className={`px-3 py-1.5 rounded-md text-sm transition-colors ${
+            snapToGrid
+              ? 'bg-primary/20 text-primary border border-primary/30'
+              : 'hover:bg-muted border border-transparent'
           }`}
+          title={snapToGrid ? 'Snap to grid enabled (click to disable)' : 'Snap to grid disabled (click to enable)'}
         >
-          Snap
+          Snap {snapToGrid ? '✓' : ''}
         </button>
 
         {/* Unit selector */}

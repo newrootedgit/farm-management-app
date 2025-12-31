@@ -4,7 +4,7 @@ import { z } from 'zod';
 // ENUMS
 // ============================================================================
 
-export const ElementTypeSchema = z.enum(['WALL', 'SINK', 'TABLE', 'GROW_RACK', 'CUSTOM']);
+export const ElementTypeSchema = z.enum(['WALL', 'SINK', 'TABLE', 'GROW_RACK', 'WALKWAY', 'CIRCLE', 'CUSTOM']);
 export type ElementType = z.infer<typeof ElementTypeSchema>;
 
 export const UnitSystemSchema = z.enum(['FEET', 'METERS']);
@@ -87,6 +87,7 @@ export const ElementPresetSchema = z.object({
   defaultThickness: z.number().positive().nullable(),
   defaultColor: z.string().regex(/^#[0-9A-Fa-f]{6}$/),
   icon: z.string().nullable(),
+  metadata: z.record(z.unknown()).nullable(),
   createdAt: z.date(),
   updatedAt: z.date(),
 });
@@ -99,6 +100,7 @@ export const CreateElementPresetSchema = z.object({
   defaultThickness: z.number().positive().optional(),
   defaultColor: z.string().regex(/^#[0-9A-Fa-f]{6}$/).optional().default('#666666'),
   icon: z.string().optional(),
+  metadata: z.record(z.unknown()).optional(),
 });
 
 export const UpdateElementPresetSchema = CreateElementPresetSchema.partial();
@@ -144,6 +146,8 @@ export const DEFAULT_ELEMENT_DIMENSIONS = {
   SINK: { width: 60, height: 45 }, // Standard utility sink
   TABLE: { width: 120, height: 60 }, // 4ft x 2ft table
   GROW_RACK: { width: 120, height: 60 }, // Standard grow rack footprint
+  WALKWAY: { width: 90, height: 30 }, // 3ft x 1ft walkway section
+  CIRCLE: { width: 60, height: 60 }, // Default circle diameter
 } as const;
 
 // Default colors for each element type
@@ -152,5 +156,7 @@ export const DEFAULT_ELEMENT_COLORS = {
   SINK: '#3182ce', // Blue
   TABLE: '#805ad5', // Purple
   GROW_RACK: '#38a169', // Green
+  WALKWAY: '#d69e2e', // Yellow/orange for visibility
+  CIRCLE: '#718096', // Gray
   CUSTOM: '#666666', // Default gray
 } as const;

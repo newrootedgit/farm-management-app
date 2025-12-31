@@ -5,7 +5,8 @@ import { DEFAULT_ELEMENT_COLORS } from '@farm/shared';
 
 interface AddElementDropdownProps {
   presets?: ElementPreset[];
-  onCreatePreset?: () => void;
+  onAddGrowRack?: () => void;
+  onManagePresets?: () => void;
 }
 
 const BUILT_IN_ELEMENTS: Array<{
@@ -35,6 +36,16 @@ const BUILT_IN_ELEMENTS: Array<{
     ),
   },
   {
+    type: 'WALKWAY',
+    label: 'Walkway',
+    description: 'Walking path between elements',
+    icon: (
+      <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7" />
+      </svg>
+    ),
+  },
+  {
     type: 'TABLE',
     label: 'Table',
     description: 'Work table or surface',
@@ -54,9 +65,23 @@ const BUILT_IN_ELEMENTS: Array<{
       </svg>
     ),
   },
+  {
+    type: 'CIRCLE',
+    label: 'Circle/Tank',
+    description: 'Round element (water tank, barrel)',
+    icon: (
+      <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <circle cx="12" cy="12" r="9" strokeWidth={2} />
+      </svg>
+    ),
+  },
 ];
 
-export function AddElementDropdown({ presets = [], onCreatePreset }: AddElementDropdownProps) {
+export function AddElementDropdown({
+  presets = [],
+  onAddGrowRack,
+  onManagePresets,
+}: AddElementDropdownProps) {
   const [isOpen, setIsOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const { setActiveElementType, activeElementType, activePresetId } = useCanvasStore();
@@ -73,6 +98,12 @@ export function AddElementDropdown({ presets = [], onCreatePreset }: AddElementD
   }, []);
 
   const handleSelectElement = (type: ElementType, presetId?: string) => {
+    // For grow racks, open the modal instead of direct placement
+    if (type === 'GROW_RACK' && onAddGrowRack && !presetId) {
+      onAddGrowRack();
+      setIsOpen(false);
+      return;
+    }
     setActiveElementType(type, presetId ?? null);
     setIsOpen(false);
   };
@@ -104,11 +135,11 @@ export function AddElementDropdown({ presets = [], onCreatePreset }: AddElementD
       </button>
 
       {isOpen && (
-        <div className="absolute top-full left-0 mt-1 w-64 bg-popover border rounded-md shadow-lg z-50">
+        <div className="absolute top-full left-0 mt-1 w-72 bg-popover border rounded-md shadow-lg z-50 max-h-[70vh] overflow-y-auto">
           {/* Built-in elements */}
           <div className="p-2">
             <div className="text-xs font-medium text-muted-foreground px-2 py-1">
-              Built-in Elements
+              Standard Elements
             </div>
             {BUILT_IN_ELEMENTS.map((element) => (
               <button
@@ -122,7 +153,7 @@ export function AddElementDropdown({ presets = [], onCreatePreset }: AddElementD
               >
                 <div
                   className="p-1.5 rounded"
-                  style={{ backgroundColor: DEFAULT_ELEMENT_COLORS[element.type] + '20' }}
+                  style={{ backgroundColor: (DEFAULT_ELEMENT_COLORS[element.type as keyof typeof DEFAULT_ELEMENT_COLORS] || '#666666') + '20' }}
                 >
                   {element.icon}
                 </div>
@@ -136,71 +167,32 @@ export function AddElementDropdown({ presets = [], onCreatePreset }: AddElementD
             ))}
           </div>
 
-          {/* Custom presets */}
-          {presets.length > 0 && (
-            <>
-              <div className="border-t" />
-              <div className="p-2">
-                <div className="text-xs font-medium text-muted-foreground px-2 py-1">
-                  Custom Presets
+          {/* Saved Presets button */}
+          <div className="border-t" />
+          <div className="p-2">
+            <button
+              onClick={() => {
+                setIsOpen(false);
+                onManagePresets?.();
+              }}
+              className="w-full flex items-center gap-3 px-2 py-2 rounded-md text-left hover:bg-muted transition-colors"
+            >
+              <div className="p-1.5 rounded bg-muted">
+                <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+                </svg>
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="font-medium text-sm">Saved Presets</div>
+                <div className="text-xs text-muted-foreground">
+                  {presets.length > 0 ? `${presets.length} preset${presets.length === 1 ? '' : 's'} saved` : 'Manage your custom presets'}
                 </div>
-                {presets.map((preset) => (
-                  <button
-                    key={preset.id}
-                    onClick={() => handleSelectElement(preset.type, preset.id)}
-                    className={`w-full flex items-center gap-3 px-2 py-2 rounded-md text-left transition-colors ${
-                      activePresetId === preset.id
-                        ? 'bg-primary/10 text-primary'
-                        : 'hover:bg-muted'
-                    }`}
-                  >
-                    <div
-                      className="w-8 h-8 rounded flex items-center justify-center text-white text-xs font-bold"
-                      style={{ backgroundColor: preset.defaultColor }}
-                    >
-                      {preset.icon || preset.name.charAt(0).toUpperCase()}
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="font-medium text-sm">{preset.name}</div>
-                      <div className="text-xs text-muted-foreground">
-                        {preset.defaultWidth && preset.defaultHeight
-                          ? `${preset.defaultWidth} x ${preset.defaultHeight}`
-                          : preset.type.replace('_', ' ')}
-                      </div>
-                    </div>
-                  </button>
-                ))}
               </div>
-            </>
-          )}
-
-          {/* Create custom preset */}
-          {onCreatePreset && (
-            <>
-              <div className="border-t" />
-              <div className="p-2">
-                <button
-                  onClick={() => {
-                    onCreatePreset();
-                    setIsOpen(false);
-                  }}
-                  className="w-full flex items-center gap-3 px-2 py-2 rounded-md text-left hover:bg-muted transition-colors"
-                >
-                  <div className="p-1.5 rounded bg-muted">
-                    <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        strokeWidth={2}
-                        d="M12 6v6m0 0v6m0-6h6m-6 0H6"
-                      />
-                    </svg>
-                  </div>
-                  <div className="font-medium text-sm">Create Custom Preset...</div>
-                </button>
-              </div>
-            </>
-          )}
+              <svg className="h-4 w-4 text-muted-foreground" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+              </svg>
+            </button>
+          </div>
 
           {/* Cancel selection */}
           {hasActiveElement && (
