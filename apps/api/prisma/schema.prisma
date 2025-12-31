@@ -31,15 +31,29 @@ model Farm {
   timezone String @default("UTC")
   currency String @default("USD")
 
+  // Branding
+  logoUrl    String?
+  brandColor String? @default("#16a34a")
+
+  // Unit preferences (for display throughout app, except farm layout)
+  weightUnit String @default("oz") // oz, g, lb, kg
+  lengthUnit String @default("in") // in, ft, cm, m
+
   // Relations to all tenant-scoped data
   users              FarmUser[]
   zones              Zone[]
   farmLayout         FarmLayout?
+  layoutElements     LayoutElement[]
+  elementPresets     ElementPreset[]
+  userPreferences    UserPreference[]
   machines           Machine[]
   employees          Employee[]
   products           Product[]
   productCategories  ProductCategory[]
   inventoryItems     InventoryItem[]
+  orders             Order[]
+  customers          Customer[]
+  customerTags       CustomerTag[]
   financialAccounts  FinancialAccount[]
   transactions       FinancialTransaction[]
   budgets            Budget[]
@@ -47,6 +61,8 @@ model Farm {
   wikiTags           WikiTag[]
   seasons            Season[]
   tasks              Task[]
+  paymentSettings    PaymentSettings?
+  payments           Payment[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -73,7 +89,7 @@ model FarmUser {
   id     String   @id @default(cuid())
   userId String
   farmId String
-  role   FarmRole @default(EMPLOYEE)
+  role   FarmRole @default(FARM_OPERATOR)
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
   farm Farm @relation(fields: [farmId], references: [id], onDelete: Cascade)
@@ -88,9 +104,10 @@ model FarmUser {
 
 enum FarmRole {
   OWNER
-  MANAGER
-  EMPLOYEE
-  VIEWER
+  ADMIN
+  FARM_MANAGER
+  SALESPERSON
+  FARM_OPERATOR
 }
 
 // ============================================================================
@@ -106,6 +123,106 @@ model FarmLayout {
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+}
+
+// ============================================================================
+// LAYOUT ELEMENTS (Walls, Equipment, Furniture)
+// ============================================================================
+
+model LayoutElement {
+  id     String      @id @default(cuid())
+  farmId String
+  farm   Farm        @relation(fields: [farmId], references: [id], onDelete: Cascade)
+  name   String
+  type   ElementType
+
+  // Line geometry (walls)
+  startX    Float?
+  startY    Float?
+  endX      Float?
+  endY      Float?
+  thickness Float?
+
+  // Rectangle geometry
+  positionX Float?
+  positionY Float?
+  width     Float?
+  height    Float?
+  rotation  Float @default(0)
+
+  // Appearance
+  color   String @default("#666666")
+  opacity Float  @default(1)
+
+  // Preset reference
+  presetId String?
+  preset   ElementPreset? @relation(fields: [presetId], references: [id])
+
+  // Flexible metadata
+  metadata Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([farmId])
+}
+
+enum ElementType {
+  WALL
+  SINK
+  TABLE
+  GROW_RACK
+  CUSTOM
+}
+
+model ElementPreset {
+  id     String      @id @default(cuid())
+  farmId String
+  farm   Farm        @relation(fields: [farmId], references: [id], onDelete: Cascade)
+  name   String
+  type   ElementType
+
+  // Default dimensions (stored in base unit - centimeters)
+  defaultWidth     Float?
+  defaultHeight    Float?
+  defaultThickness Float?
+
+  // Appearance defaults
+  defaultColor String  @default("#666666")
+  icon         String?
+
+  elements LayoutElement[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([farmId, name])
+  @@index([farmId])
+}
+
+model UserPreference {
+  id     String @id @default(cuid())
+  userId String
+  farmId String
+  farm   Farm   @relation(fields: [farmId], references: [id], onDelete: Cascade)
+
+  // Tutorial state
+  hasSeenLayoutTutorial Boolean @default(false)
+
+  // Unit preferences
+  preferredUnit UnitSystem @default(FEET)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, farmId])
+  @@index([userId])
+  @@index([farmId])
+}
+
+enum UnitSystem {
+  FEET
+  METERS
 }
 
 model Zone {
@@ -235,17 +352,56 @@ model Product {
   seedWeight Float?
   seedUnit   String?
 
+  // Microgreen production fields
+  daysSoaking     Int?   // Days seeds soak before planting
+  daysGermination Int?   // Days in germination (dark/humidity dome)
+  daysLight       Int?   // Days under grow lights
+  avgYieldPerTray Float? // Average yield per tray in ounces
+
   unitCost  Float?
   unitPrice Float?
 
   inventoryItems InventoryItem[]
   zoneOutputs    ZoneOutput[]
+  orderItems     OrderItem[]
+  skus           Sku[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@unique([farmId, sku])
   @@index([farmId])
+}
+
+// ============================================================================
+// SKU (Stock Keeping Unit) - Sized Product Variants
+// ============================================================================
+
+model Sku {
+  id        String  @id @default(cuid())
+  productId String
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  skuCode   String  // e.g., "ARU-4OZ"
+  name      String  // Display name: "4oz Arugula"
+  weightOz  Float   // Weight in ounces
+
+  price     Int     // Price in cents (500 = $5.00)
+
+  isAvailable       Boolean @default(true)
+  stockQuantity     Int?    // Optional inventory tracking
+  lowStockThreshold Int?
+  displayOrder      Int     @default(0)
+  isPublic          Boolean @default(true)
+  imageUrl          String? // SKU product image
+
+  orderItems OrderItem[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([productId, skuCode])
+  @@index([productId])
 }
 
 model InventoryItem {
@@ -300,6 +456,159 @@ enum InventoryTxType {
   WASTE
   HARVEST
   PLANTING
+}
+
+// ============================================================================
+// CUSTOMER MANAGEMENT (CRM)
+// ============================================================================
+
+model Customer {
+  id     String @id @default(cuid())
+  farmId String
+  farm   Farm   @relation(fields: [farmId], references: [id], onDelete: Cascade)
+
+  // Contact Information
+  name        String
+  email       String?
+  phone       String?
+  companyName String?
+
+  // Address
+  addressLine1 String?
+  addressLine2 String?
+  city         String?
+  state        String?
+  postalCode   String?
+  country      String @default("US")
+
+  // Payment Terms
+  paymentTerms   String @default("DUE_ON_RECEIPT") // DUE_ON_RECEIPT, NET_7, NET_15, NET_30, NET_60
+  creditLimit    Float? // Maximum credit in dollars
+  accountBalance Float  @default(0) // Current balance owed
+
+  // Categorization
+  customerType String       @default("RETAIL") // RETAIL, WHOLESALE, RESTAURANT, FARMERS_MARKET, DISTRIBUTOR, OTHER
+  tags         CustomerTag[]
+  notes        String?
+
+  // Status
+  isActive Boolean @default(true)
+
+  // Relations
+  orders Order[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([farmId, email])
+  @@index([farmId])
+  @@index([farmId, name])
+}
+
+model CustomerTag {
+  id     String @id @default(cuid())
+  farmId String
+  farm   Farm   @relation(fields: [farmId], references: [id], onDelete: Cascade)
+
+  name      String
+  color     String     @default("#3b82f6")
+  customers Customer[]
+
+  @@unique([farmId, name])
+  @@index([farmId])
+}
+
+// ============================================================================
+// ORDER MANAGEMENT (Microgreen Production)
+// ============================================================================
+
+model Order {
+  id          String      @id @default(cuid())
+  farmId      String
+  farm        Farm        @relation(fields: [farmId], references: [id], onDelete: Cascade)
+
+  orderNumber String      // e.g., "ORD-2025-001"
+  customerName String?    // Legacy: customer name string (kept for backward compat)
+  customerId   String?    // New: link to Customer entity
+  customer     Customer?  @relation(fields: [customerId], references: [id])
+  status      OrderStatus @default(PENDING)
+  notes       String?
+
+  // Order source tracking
+  orderSource String @default("INTERNAL") // INTERNAL, STOREFRONT, API
+
+  // Payment tracking
+  paymentStatus String?   // UNPAID, PAID, REFUNDED
+
+  items    OrderItem[]
+  payments Payment[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([farmId, orderNumber])
+  @@index([farmId, status])
+  @@index([farmId, customerId])
+}
+
+enum OrderStatus {
+  PENDING
+  IN_PROGRESS
+  READY
+  DELIVERED
+  CANCELLED
+}
+
+model OrderItem {
+  id        String  @id @default(cuid())
+  orderId   String
+  order     Order   @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  productId String
+  product   Product @relation(fields: [productId], references: [id])
+
+  // Optional SKU reference (for storefront orders)
+  skuId String?
+  sku   Sku?    @relation(fields: [skuId], references: [id])
+
+  // Pricing (for storefront orders)
+  quantity       Int?   // Quantity of SKUs ordered
+  unitPriceCents Int?   // Price per unit at time of order
+  lineTotalCents Int?   // Line item total
+
+  // Order specifications (for production)
+  quantityOz     Float    // Quantity ordered in ounces
+  harvestDate    DateTime // Target harvest date
+  overagePercent Float    @default(10) // Overage percentage (default 10%)
+
+  // Auto-calculated fields
+  traysNeeded     Int      // Calculated: ceil((quantityOz * (1 + overage%)) / avgYield)
+  soakDate        DateTime // Calculated: harvestDate - daysLight - daysGermination - daysSoaking
+  seedDate        DateTime // Calculated: harvestDate - daysLight - daysGermination
+  moveToLightDate DateTime // Calculated: harvestDate - daysLight
+
+  // Actual results (filled after production)
+  actualYieldOz Float?
+  actualTrays   Int?
+
+  status OrderItemStatus @default(PENDING)
+
+  tasks Task[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([orderId])
+  @@index([productId])
+  @@index([harvestDate])
+}
+
+enum OrderItemStatus {
+  PENDING
+  SOAKING
+  GERMINATING
+  GROWING
+  HARVESTED
+  CANCELLED
 }
 
 // ============================================================================
@@ -635,6 +944,11 @@ model Task {
   status   TaskStatus   @default(TODO)
   priority TaskPriority @default(MEDIUM)
 
+  // Link to order item (for microgreen production tasks)
+  orderItemId String?
+  orderItem   OrderItem? @relation(fields: [orderItemId], references: [id], onDelete: Cascade)
+
+  // Legacy: Keep cropPlanId for backward compatibility
   cropPlanId String?
   cropPlan   CropPlan? @relation(fields: [cropPlanId], references: [id])
 
@@ -642,19 +956,32 @@ model Task {
 
   recurrence Json?
 
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
-  completedAt DateTime?
+  // Completion log fields
+  completedAt     DateTime?
+  completedBy     String?   // Name of person who completed it
+  completionNotes String?   // Notes from completion
+  actualTrays     Int?      // Actual trays processed (may differ from expected)
+  seedLot         String?   // Seed lot number for traceability
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([farmId, status])
   @@index([farmId, dueDate])
+  @@index([orderItemId])
 }
 
 enum TaskType {
+  // Microgreen production tasks
+  SOAK
+  SEED
+  MOVE_TO_LIGHT
+  HARVESTING
+
+  // General farm tasks
   PLANTING
   WATERING
   FERTILIZING
-  HARVESTING
   MAINTENANCE
   INSPECTION
   OTHER
@@ -688,4 +1015,85 @@ model TaskAssignment {
 
   @@index([taskId])
   @@index([employeeId])
+}
+
+// ============================================================================
+// PAYMENTS
+// ============================================================================
+
+model PaymentSettings {
+  id                    String  @id @default(cuid())
+  farmId                String  @unique
+  farm                  Farm    @relation(fields: [farmId], references: [id], onDelete: Cascade)
+
+  // Stripe Connect
+  stripeAccountId          String?
+  stripeAccountStatus      String  @default("NOT_CONNECTED") // NOT_CONNECTED, PENDING, ACTIVE, RESTRICTED
+  stripeOnboardingComplete Boolean @default(false)
+
+  // PayPal Commerce Platform
+  paypalMerchantId      String?
+  paypalClientId        String?
+  paypalAccountStatus   String  @default("NOT_CONNECTED")
+
+  // Settings
+  preferredProcessor    String  @default("STRIPE") // STRIPE or PAYPAL
+  paymentTiming         String  @default("UPFRONT") // UPFRONT or ON_READY
+  platformFeePercent    Float   @default(2.5)
+
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+}
+
+model Payment {
+  id                    String    @id @default(cuid())
+  farmId                String
+  farm                  Farm      @relation(fields: [farmId], references: [id], onDelete: Cascade)
+  orderId               String?
+  order                 Order?    @relation(fields: [orderId], references: [id])
+
+  amount                Float
+  currency              String    @default("usd")
+  status                String    @default("PENDING") // PENDING, PROCESSING, SUCCEEDED, FAILED, REFUNDED, PARTIALLY_REFUNDED, CANCELLED
+  processor             String    @default("STRIPE") // STRIPE or PAYPAL
+  platformFee           Int?      // Platform fee in cents
+
+  // Stripe-specific fields
+  stripePaymentIntentId String?
+  stripePaymentLinkId   String?
+
+  // PayPal-specific fields
+  paypalOrderId         String?
+
+  // Payment link fields
+  paymentLinkId         String?   @unique
+  paymentLinkUrl        String?
+  paymentLinkExpiresAt  DateTime?
+
+  customerEmail         String?
+  customerName          String?
+  description           String?
+
+  // Result fields
+  paidAt                DateTime?
+  failureReason         String?
+  refundedAmount        Float?
+  refundedAt            DateTime?
+
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  @@index([farmId])
+  @@index([orderId])
+  @@index([stripePaymentIntentId])
+  @@index([paypalOrderId])
+}
+
+model StripeWebhookEvent {
+  id            String   @id @default(cuid())
+  stripeEventId String   @unique
+  eventType     String
+  processed     Boolean  @default(false)
+  error         String?
+  createdAt     DateTime @default(now())
 }

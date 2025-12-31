@@ -12,7 +12,7 @@ export const InventoryTxTypeSchema = z.enum([
 ]);
 export type InventoryTxType = z.infer<typeof InventoryTxTypeSchema>;
 
-// Product schemas
+// Product schemas (with microgreen production fields)
 export const ProductSchema = z.object({
   id: z.string().cuid(),
   farmId: z.string().cuid(),
@@ -21,6 +21,13 @@ export const ProductSchema = z.object({
   categoryId: z.string().cuid().nullable(),
   seedWeight: z.number().positive().nullable(),
   seedUnit: z.string().nullable(),
+
+  // Microgreen production fields
+  daysSoaking: z.number().int().nonnegative().nullable(),
+  daysGermination: z.number().int().nonnegative().nullable(),
+  daysLight: z.number().int().nonnegative().nullable(),
+  avgYieldPerTray: z.number().positive().nullable(),
+
   unitCost: z.number().nonnegative().nullable(),
   unitPrice: z.number().nonnegative().nullable(),
   createdAt: z.date(),
@@ -28,11 +35,18 @@ export const ProductSchema = z.object({
 });
 
 export const CreateProductSchema = z.object({
-  name: z.string().min(1, 'Product name is required').max(100),
+  name: z.string().min(1, 'Variety name is required').max(100),
   sku: z.string().optional(),
   categoryId: z.string().cuid().optional(),
   seedWeight: z.number().positive().optional(),
-  seedUnit: z.string().optional(),
+  seedUnit: z.string().default('grams'),
+
+  // Microgreen production fields
+  daysSoaking: z.number().int().nonnegative().optional(),
+  daysGermination: z.number().int().nonnegative().optional(),
+  daysLight: z.number().int().nonnegative().optional(),
+  avgYieldPerTray: z.number().positive().optional(),
+
   unitCost: z.number().nonnegative().optional(),
   unitPrice: z.number().nonnegative().optional(),
 });

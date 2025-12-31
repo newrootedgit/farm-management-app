@@ -5,10 +5,15 @@ export const SeasonStatusSchema = z.enum(['PLANNING', 'ACTIVE', 'COMPLETED']);
 export const TaskStatusSchema = z.enum(['TODO', 'IN_PROGRESS', 'COMPLETED', 'CANCELLED']);
 export const TaskPrioritySchema = z.enum(['LOW', 'MEDIUM', 'HIGH', 'URGENT']);
 export const TaskTypeSchema = z.enum([
+  // Microgreen production tasks
+  'SOAK',
+  'SEED',
+  'MOVE_TO_LIGHT',
+  'HARVESTING',
+  // General farm tasks
   'PLANTING',
   'WATERING',
   'FERTILIZING',
-  'HARVESTING',
   'MAINTENANCE',
   'INSPECTION',
   'OTHER',
@@ -103,11 +108,17 @@ export const TaskSchema = z.object({
   startDate: z.date().nullable(),
   status: TaskStatusSchema,
   priority: TaskPrioritySchema,
-  cropPlanId: z.string().cuid().nullable(),
+  orderItemId: z.string().cuid().nullable(), // Link to order item (microgreens)
+  cropPlanId: z.string().cuid().nullable(),  // Legacy: keep for backward compatibility
   recurrence: z.any().nullable(), // JSON for recurrence pattern
+  // Completion log fields
+  completedAt: z.date().nullable(),
+  completedBy: z.string().nullable(),
+  completionNotes: z.string().nullable(),
+  actualTrays: z.number().int().nullable(),
+  seedLot: z.string().nullable(),
   createdAt: z.date(),
   updatedAt: z.date(),
-  completedAt: z.date().nullable(),
 });
 
 export const CreateTaskSchema = z.object({
@@ -118,6 +129,7 @@ export const CreateTaskSchema = z.object({
   startDate: z.date().optional(),
   status: TaskStatusSchema.default('TODO'),
   priority: TaskPrioritySchema.default('MEDIUM'),
+  orderItemId: z.string().cuid().optional(),
   cropPlanId: z.string().cuid().optional(),
   recurrence: z.object({
     type: z.enum(['daily', 'weekly', 'monthly']),
@@ -135,8 +147,24 @@ export const UpdateTaskSchema = z.object({
   startDate: z.date().nullable().optional(),
   status: TaskStatusSchema.optional(),
   priority: TaskPrioritySchema.optional(),
+  orderItemId: z.string().cuid().nullable().optional(),
   cropPlanId: z.string().cuid().nullable().optional(),
   recurrence: z.any().nullable().optional(),
+  // Completion log fields
+  completedBy: z.string().nullable().optional(),
+  completionNotes: z.string().nullable().optional(),
+  actualTrays: z.number().int().nullable().optional(),
+  seedLot: z.string().nullable().optional(),
+});
+
+// Schema for completing a task with log data
+export const CompleteTaskSchema = z.object({
+  completedBy: z.string().min(1, 'Name is required'),
+  completionNotes: z.string().optional(),
+  actualTrays: z.number().int().positive().optional(),
+  actualYieldOz: z.number().positive().optional(), // For harvest tasks
+  seedLot: z.string().optional(), // Seed lot number for traceability
+  completedAt: z.coerce.date().optional(), // Allow custom completion date/time
 });
 
 // Task Assignment schemas
@@ -162,8 +190,25 @@ export type UpdateSeason = z.infer<typeof UpdateSeasonSchema>;
 export type CropPlan = z.infer<typeof CropPlanSchema>;
 export type CreateCropPlan = z.infer<typeof CreateCropPlanSchema>;
 export type UpdateCropPlan = z.infer<typeof UpdateCropPlanSchema>;
-export type Task = z.infer<typeof TaskSchema>;
+export type Task = z.infer<typeof TaskSchema> & {
+  orderItem?: {
+    id: string;
+    quantityOz: number;
+    traysNeeded: number;
+    harvestDate: Date;
+    product?: {
+      id: string;
+      name: string;
+    };
+    order?: {
+      id: string;
+      orderNumber: string;
+      customer: string;
+    };
+  } | null;
+};
 export type CreateTask = z.infer<typeof CreateTaskSchema>;
 export type UpdateTask = z.infer<typeof UpdateTaskSchema>;
+export type CompleteTask = z.infer<typeof CompleteTaskSchema>;
 export type TaskAssignment = z.infer<typeof TaskAssignmentSchema>;
 export type CreateTaskAssignment = z.infer<typeof CreateTaskAssignmentSchema>;

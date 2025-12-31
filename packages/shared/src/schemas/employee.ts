@@ -1,5 +1,9 @@
 import { z } from 'zod';
 
+// Employee position types
+export const EmployeePositionSchema = z.enum(['FARM_MANAGER', 'SALESPERSON', 'FARM_OPERATOR']);
+export type EmployeePosition = z.infer<typeof EmployeePositionSchema>;
+
 // Employee status
 export const EmployeeStatusSchema = z.enum(['ACTIVE', 'ON_LEAVE', 'TERMINATED']);
 export type EmployeeStatus = z.infer<typeof EmployeeStatusSchema>;
@@ -13,7 +17,7 @@ export const EmployeeSchema = z.object({
   lastName: z.string().min(1).max(50),
   email: z.string().email().nullable(),
   phone: z.string().nullable(),
-  position: z.string().nullable(),
+  position: EmployeePositionSchema.nullable(),
   department: z.string().nullable(),
   hireDate: z.date().nullable(),
   hourlyRate: z.number().nonnegative().nullable(),
@@ -22,19 +26,26 @@ export const EmployeeSchema = z.object({
   updatedAt: z.date(),
 });
 
-export const CreateEmployeeSchema = z.object({
+// Base schema for create (before refine)
+const CreateEmployeeBaseSchema = z.object({
   firstName: z.string().min(1, 'First name is required').max(50),
   lastName: z.string().min(1, 'Last name is required').max(50),
   email: z.string().email().optional(),
   phone: z.string().optional(),
-  position: z.string().optional(),
+  position: EmployeePositionSchema,
   department: z.string().optional(),
-  hireDate: z.date().optional(),
+  hireDate: z.string().optional(), // Accept ISO string from frontend
   hourlyRate: z.number().nonnegative().optional(),
   status: EmployeeStatusSchema.default('ACTIVE'),
 });
 
-export const UpdateEmployeeSchema = CreateEmployeeSchema.partial();
+// Require email OR phone for password recovery
+export const CreateEmployeeSchema = CreateEmployeeBaseSchema.refine(
+  (data) => data.email || data.phone,
+  { message: 'Either email or phone is required for password recovery', path: ['email'] }
+);
+
+export const UpdateEmployeeSchema = CreateEmployeeBaseSchema.partial();
 
 // Shift schemas
 export const ShiftSchema = z.object({

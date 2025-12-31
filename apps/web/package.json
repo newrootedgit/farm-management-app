@@ -12,6 +12,9 @@
   "dependencies": {
     "@clerk/clerk-react": "^5.19.0",
     "@farm/shared": "workspace:*",
+    "@paypal/react-paypal-js": "^8.9.2",
+    "@stripe/react-stripe-js": "^5.4.1",
+    "@stripe/stripe-js": "^8.6.0",
     "@tanstack/react-query": "^5.62.8",
     "konva": "^9.3.18",
     "react": "^18.3.1",

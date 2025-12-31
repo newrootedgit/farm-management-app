@@ -1,15 +1,42 @@
+import { useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { useFarmStore, useUIStore } from '@/stores/farm-store';
-import { useFarms } from '@/lib/api-client';
+import { useFarms, useFarm, useCreateFarm } from '@/lib/api-client';
 
-const navigation = [
+type FarmRole = 'OWNER' | 'ADMIN' | 'FARM_MANAGER' | 'SALESPERSON' | 'FARM_OPERATOR';
+
+// Role hierarchy for permission checks
+const roleHierarchy: Record<FarmRole, number> = {
+  OWNER: 5,
+  ADMIN: 4,
+  FARM_MANAGER: 3,
+  SALESPERSON: 2,
+  FARM_OPERATOR: 1,
+};
+
+const hasRole = (userRole: FarmRole | undefined, minRole: FarmRole): boolean => {
+  if (!userRole) return false;
+  return roleHierarchy[userRole] >= roleHierarchy[minRole];
+};
+
+interface NavItem {
+  name: string;
+  href: string;
+  icon: React.ComponentType<{ className?: string }>;
+  minRole?: FarmRole; // If not set, all roles can access
+}
+
+const navigation: NavItem[] = [
   { name: 'Dashboard', href: '/', icon: HomeIcon },
-  { name: 'Farm Layout', href: '/layout', icon: MapIcon },
-  { name: 'Zones', href: '/zones', icon: GridIcon },
-  { name: 'Inventory', href: '/inventory', icon: PackageIcon },
-  { name: 'Employees', href: '/employees', icon: UsersIcon },
-  { name: 'Planning', href: '/planning', icon: CalendarIcon },
-  { name: 'Financials', href: '/financials', icon: DollarIcon },
+  { name: 'Operations', href: '/operations', icon: ClipboardIcon },
+  { name: 'Planning', href: '/planning', icon: CalendarIcon, minRole: 'FARM_MANAGER' },
+  { name: 'Crop Varieties', href: '/inventory', icon: PackageIcon, minRole: 'FARM_MANAGER' },
+  { name: 'Customers', href: '/customers', icon: CustomerIcon, minRole: 'SALESPERSON' },
+  { name: 'Store', href: '/store', icon: StoreIcon, minRole: 'ADMIN' },
+  { name: 'Farm Layout', href: '/layout', icon: MapIcon, minRole: 'ADMIN' },
+  { name: 'Zones', href: '/zones', icon: GridIcon, minRole: 'FARM_MANAGER' },
+  { name: 'Employees', href: '/employees', icon: UsersIcon, minRole: 'ADMIN' },
+  { name: 'Financials', href: '/financials', icon: DollarIcon, minRole: 'ADMIN' },
   { name: 'Wiki', href: '/wiki', icon: BookIcon },
   { name: 'Settings', href: '/settings', icon: SettingsIcon },
 ];
@@ -19,6 +46,45 @@ export function Sidebar() {
   const { sidebarOpen } = useUIStore();
   const { currentFarmId, setCurrentFarm } = useFarmStore();
   const { data: farms } = useFarms();
+  const { data: currentFarm } = useFarm(currentFarmId ?? undefined);
+  const createFarm = useCreateFarm();
+
+  const [showCreateForm, setShowCreateForm] = useState(false);
+  const [newFarmName, setNewFarmName] = useState('');
+  const [createError, setCreateError] = useState('');
+
+  // Get user's role for current farm
+  const userRole = (currentFarm?.role as FarmRole) ?? undefined;
+
+  // Filter navigation based on user role
+  const filteredNavigation = navigation.filter((item) => {
+    if (!item.minRole) return true; // No role required
+    return hasRole(userRole, item.minRole);
+  });
+
+  const handleCreateFarm = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setCreateError('');
+
+    if (!newFarmName.trim()) {
+      setCreateError('Name required');
+      return;
+    }
+
+    const slug = newFarmName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+
+    try {
+      const farm = await createFarm.mutateAsync({
+        name: newFarmName.trim(),
+        slug,
+      });
+      setCurrentFarm(farm.id);
+      setNewFarmName('');
+      setShowCreateForm(false);
+    } catch (err) {
+      setCreateError(err instanceof Error ? err.message : 'Failed to create');
+    }
+  };
 
   if (!sidebarOpen) return null;
 
@@ -26,7 +92,7 @@ export function Sidebar() {
     <aside className="fixed inset-y-0 left-0 z-50 w-64 bg-card border-r flex flex-col">
       {/* Logo */}
       <div className="h-16 flex items-center px-6 border-b">
-        <span className="text-xl font-bold text-primary">FarmOS</span>
+        <span className="text-xl font-bold text-primary">Rooted Planner</span>
       </div>
 
       {/* Farm Selector */}
@@ -34,7 +100,13 @@ export function Sidebar() {
         <label className="text-xs font-medium text-muted-foreground">Current Farm</label>
         <select
           value={currentFarmId || ''}
-          onChange={(e) => setCurrentFarm(e.target.value || null)}
+          onChange={(e) => {
+            if (e.target.value === '__new__') {
+              setShowCreateForm(true);
+            } else {
+              setCurrentFarm(e.target.value || null);
+            }
+          }}
           className="mt-1 w-full rounded-md border bg-background px-3 py-2 text-sm"
         >
           <option value="">Select a farm...</option>
@@ -43,12 +115,50 @@ export function Sidebar() {
               {farm.name}
             </option>
           ))}
+          <option value="__new__">+ Add new farm</option>
         </select>
+
+        {/* Inline Create Form */}
+        {showCreateForm && (
+          <form onSubmit={handleCreateFarm} className="mt-3 space-y-2">
+            <input
+              type="text"
+              value={newFarmName}
+              onChange={(e) => setNewFarmName(e.target.value)}
+              placeholder="Farm name"
+              className="w-full rounded-md border bg-background px-3 py-2 text-sm"
+              autoFocus
+            />
+            {createError && (
+              <p className="text-xs text-destructive">{createError}</p>
+            )}
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowCreateForm(false);
+                  setNewFarmName('');
+                  setCreateError('');
+                }}
+                className="flex-1 px-2 py-1 text-xs border rounded hover:bg-accent"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={createFarm.isPending}
+                className="flex-1 px-2 py-1 text-xs bg-primary text-primary-foreground rounded hover:bg-primary/90 disabled:opacity-50"
+              >
+                {createFarm.isPending ? '...' : 'Create'}
+              </button>
+            </div>
+          </form>
+        )}
       </div>
 
       {/* Navigation */}
       <nav className="flex-1 overflow-y-auto p-4 space-y-1">
-        {navigation.map((item) => {
+        {filteredNavigation.map((item) => {
           const isActive = location.pathname === item.href;
           return (
             <Link
@@ -69,7 +179,7 @@ export function Sidebar() {
 
       {/* Footer */}
       <div className="p-4 border-t text-xs text-muted-foreground">
-        Farm Management v0.1.0
+        Rooted Planner v0.1.0
       </div>
     </aside>
   );
@@ -145,6 +255,30 @@ function SettingsIcon({ className }: { className?: string }) {
     <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor">
       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+    </svg>
+  );
+}
+
+function ClipboardIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01" />
+    </svg>
+  );
+}
+
+function CustomerIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
+    </svg>
+  );
+}
+
+function StoreIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 11-4 0 2 2 0 014 0z" />
     </svg>
   );
 }

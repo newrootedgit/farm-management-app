@@ -1,12 +1,16 @@
 import { useCanvasStore, CanvasTool } from '@/stores/canvas-store';
+import { AddElementDropdown } from './AddElementDropdown';
+import type { ElementPreset, UnitSystem } from '@farm/shared';
 
 interface ToolButtonProps {
   tool: CanvasTool;
   icon: React.ReactNode;
   label: string;
+  shortcut: string;
+  description: string;
 }
 
-function ToolButton({ tool, icon, label }: ToolButtonProps) {
+function ToolButton({ tool, icon, label, shortcut, description }: ToolButtonProps) {
   const { activeTool, setActiveTool } = useCanvasStore();
   const isActive = activeTool === tool;
 
@@ -18,7 +22,8 @@ function ToolButton({ tool, icon, label }: ToolButtonProps) {
           ? 'bg-primary text-primary-foreground'
           : 'hover:bg-muted'
       }`}
-      title={label}
+      title={`${label} (${shortcut})\n${description}`}
+      data-tutorial={`tool-${tool}`}
     >
       {icon}
     </button>
@@ -28,9 +33,20 @@ function ToolButton({ tool, icon, label }: ToolButtonProps) {
 interface CanvasToolbarProps {
   onSave?: () => void;
   isSaving?: boolean;
+  presets?: ElementPreset[];
+  onCreatePreset?: () => void;
+  unitSystem?: UnitSystem;
+  onUnitChange?: (unit: UnitSystem) => void;
 }
 
-export function CanvasToolbar({ onSave, isSaving }: CanvasToolbarProps) {
+export function CanvasToolbar({
+  onSave,
+  isSaving,
+  presets,
+  onCreatePreset,
+  unitSystem = 'FEET',
+  onUnitChange,
+}: CanvasToolbarProps) {
   const {
     showGrid,
     toggleGrid,
@@ -38,6 +54,7 @@ export function CanvasToolbar({ onSave, isSaving }: CanvasToolbarProps) {
     toggleSnapToGrid,
     zoom,
     setZoom,
+    setPanOffset,
     undo,
     redo,
     canUndo,
@@ -51,7 +68,9 @@ export function CanvasToolbar({ onSave, isSaving }: CanvasToolbarProps) {
       <div className="flex items-center gap-1">
         <ToolButton
           tool="select"
-          label="Select (V)"
+          label="Select"
+          shortcut="S"
+          description="Click to select and move elements. Drag corners to resize."
           icon={
             <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 15l-2 5L9 9l11 4-5 2zm0 0l5 5M7.188 2.239l.777 2.897M5.136 7.965l-2.898-.777M13.95 4.05l-2.122 2.122m-5.657 5.656l-2.12 2.122" />
@@ -60,7 +79,9 @@ export function CanvasToolbar({ onSave, isSaving }: CanvasToolbarProps) {
         />
         <ToolButton
           tool="zone"
-          label="Draw Zone (Z)"
+          label="Draw Zone"
+          shortcut="Z"
+          description="Click and drag to create a new zone area."
           icon={
             <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 5a1 1 0 011-1h14a1 1 0 011 1v2a1 1 0 01-1 1H5a1 1 0 01-1-1V5zM4 13a1 1 0 011-1h6a1 1 0 011 1v6a1 1 0 01-1 1H5a1 1 0 01-1-1v-6zM16 13a1 1 0 011-1h2a1 1 0 011 1v6a1 1 0 01-1 1h-2a1 1 0 01-1-1v-6z" />
@@ -69,13 +90,20 @@ export function CanvasToolbar({ onSave, isSaving }: CanvasToolbarProps) {
         />
         <ToolButton
           tool="pan"
-          label="Pan (H)"
+          label="Pan"
+          shortcut="H"
+          description="Click and drag to move around the canvas."
           icon={
             <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 11.5V14m0-2.5v-6a1.5 1.5 0 113 0m-3 6a1.5 1.5 0 00-3 0v2a7.5 7.5 0 0015 0v-5a1.5 1.5 0 00-3 0m-6-3V11m0-5.5v-1a1.5 1.5 0 013 0v1m0 0V11m0-5.5a1.5 1.5 0 013 0v3m0 0V11" />
             </svg>
           }
         />
+
+        <div className="w-px h-6 bg-border mx-2" />
+
+        {/* Add Element Dropdown */}
+        <AddElementDropdown presets={presets} onCreatePreset={onCreatePreset} />
 
         <div className="w-px h-6 bg-border mx-2" />
 
@@ -121,6 +149,40 @@ export function CanvasToolbar({ onSave, isSaving }: CanvasToolbarProps) {
           Snap
         </button>
 
+        {/* Unit selector */}
+        {onUnitChange && (
+          <>
+            <div className="w-px h-6 bg-border mx-2" />
+            <div
+              className="flex rounded-md border overflow-hidden text-sm"
+              data-tutorial="unit-toggle"
+            >
+              <button
+                onClick={() => onUnitChange('FEET')}
+                className={`px-3 py-1 transition-colors ${
+                  unitSystem === 'FEET'
+                    ? 'bg-primary text-primary-foreground'
+                    : 'bg-background hover:bg-muted'
+                }`}
+                title="Use feet"
+              >
+                ft
+              </button>
+              <button
+                onClick={() => onUnitChange('METERS')}
+                className={`px-3 py-1 transition-colors ${
+                  unitSystem === 'METERS'
+                    ? 'bg-primary text-primary-foreground'
+                    : 'bg-background hover:bg-muted'
+                }`}
+                title="Use meters"
+              >
+                m
+              </button>
+            </div>
+          </>
+        )}
+
         <div className="w-px h-6 bg-border mx-2" />
 
         {/* Zoom controls */}
@@ -144,11 +206,14 @@ export function CanvasToolbar({ onSave, isSaving }: CanvasToolbarProps) {
           </svg>
         </button>
         <button
-          onClick={() => setZoom(1)}
+          onClick={() => {
+            setZoom(1);
+            setPanOffset({ x: 0, y: 0 });
+          }}
           className="px-2 py-1 rounded-md text-sm hover:bg-muted"
-          title="Reset Zoom"
+          title="Reset view to center at 100% zoom"
         >
-          100%
+          Center
         </button>
       </div>
 

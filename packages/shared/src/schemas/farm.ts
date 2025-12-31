@@ -1,5 +1,11 @@
 import { z } from 'zod';
 
+// Weight unit options: oz, g, lb, kg
+export const WeightUnitSchema = z.enum(['oz', 'g', 'lb', 'kg']);
+
+// Length unit options: in, ft, cm, m
+export const LengthUnitSchema = z.enum(['in', 'ft', 'cm', 'm']);
+
 // Farm schemas
 export const FarmSchema = z.object({
   id: z.string().cuid(),
@@ -8,6 +14,10 @@ export const FarmSchema = z.object({
   companyId: z.string().cuid().nullable(),
   timezone: z.string().default('UTC'),
   currency: z.string().default('USD'),
+  logoUrl: z.string().nullable().optional(),
+  brandColor: z.string().nullable().optional(),
+  weightUnit: WeightUnitSchema.default('oz'),
+  lengthUnit: LengthUnitSchema.default('in'),
   createdAt: z.date(),
   updatedAt: z.date(),
 });
@@ -17,6 +27,8 @@ export const CreateFarmSchema = z.object({
   slug: z.string().min(1).max(50).regex(/^[a-z0-9-]+$/, 'Slug must be lowercase alphanumeric with dashes'),
   timezone: z.string().optional(),
   currency: z.string().optional(),
+  weightUnit: WeightUnitSchema.optional(),
+  lengthUnit: LengthUnitSchema.optional(),
 });
 
 export const UpdateFarmSchema = CreateFarmSchema.partial();

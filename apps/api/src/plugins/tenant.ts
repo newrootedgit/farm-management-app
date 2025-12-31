@@ -2,7 +2,7 @@ import { FastifyPluginAsync, FastifyRequest, FastifyReply } from 'fastify';
 import fp from 'fastify-plugin';
 import { ForbiddenError, UnauthorizedError } from '../lib/errors.js';
 
-type FarmRole = 'OWNER' | 'MANAGER' | 'EMPLOYEE' | 'VIEWER';
+type FarmRole = 'OWNER' | 'ADMIN' | 'FARM_MANAGER' | 'SALESPERSON' | 'FARM_OPERATOR';
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -11,12 +11,13 @@ declare module 'fastify' {
   }
 }
 
-// Role hierarchy for permission checks
+// Role hierarchy for permission checks (higher number = more permissions)
 const roleHierarchy: Record<FarmRole, number> = {
-  OWNER: 4,
-  MANAGER: 3,
-  EMPLOYEE: 2,
-  VIEWER: 1,
+  OWNER: 5,
+  ADMIN: 4,
+  FARM_MANAGER: 3,
+  SALESPERSON: 2,
+  FARM_OPERATOR: 1,
 };
 
 export function requireRole(minRole: FarmRole) {
