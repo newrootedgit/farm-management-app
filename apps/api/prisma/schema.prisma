@@ -626,12 +626,19 @@ model Employee {
   lastName   String
   email      String?
   phone      String?
-  position   String?
+  position   EmployeePosition?
   department String?
   hireDate   DateTime?
   hourlyRate Float?
 
   status EmployeeStatus @default(ACTIVE)
+
+  // Invitation system for account creation
+  inviteToken     String?       @unique
+  inviteStatus    InviteStatus  @default(NOT_INVITED)
+  inviteExpiresAt DateTime?
+  invitedAt       DateTime?
+  acceptedAt      DateTime?
 
   shifts      Shift[]
   timeEntries TimeEntry[]
@@ -647,6 +654,20 @@ enum EmployeeStatus {
   ACTIVE
   ON_LEAVE
   TERMINATED
+}
+
+enum EmployeePosition {
+  FARM_MANAGER
+  SALESPERSON
+  FARM_OPERATOR
+}
+
+enum InviteStatus {
+  NOT_INVITED  // No invite sent yet
+  PENDING      // Invite sent, awaiting response
+  ACCEPTED     // User created account
+  EXPIRED      // Token expired
+  REVOKED      // Admin cancelled invite
 }
 
 model Shift {

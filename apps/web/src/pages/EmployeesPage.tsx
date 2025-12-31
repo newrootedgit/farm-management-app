@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useFarmStore } from '@/stores/farm-store';
-import { useEmployees, useCreateEmployee, useUpdateEmployee, useDeleteEmployee } from '@/lib/api-client';
-import type { Employee, CreateEmployee, UpdateEmployee, EmployeePosition, EmployeeStatus } from '@farm/shared';
+import { useEmployees, useCreateEmployee, useUpdateEmployee, useDeleteEmployee, useSendEmployeeInvite } from '@/lib/api-client';
+import type { Employee, CreateEmployee, UpdateEmployee, EmployeePosition, EmployeeStatus, InviteStatus } from '@farm/shared';
 
 // Position labels
 const POSITION_LABELS: Record<EmployeePosition, string> = {
@@ -11,9 +11,9 @@ const POSITION_LABELS: Record<EmployeePosition, string> = {
 };
 
 const POSITION_COLORS: Record<EmployeePosition, string> = {
-  FARM_MANAGER: 'bg-purple-100 text-purple-800',
-  SALESPERSON: 'bg-blue-100 text-blue-800',
-  FARM_OPERATOR: 'bg-green-100 text-green-800',
+  FARM_MANAGER: 'bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-300',
+  SALESPERSON: 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300',
+  FARM_OPERATOR: 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300',
 };
 
 // Status labels
@@ -24,16 +24,33 @@ const STATUS_LABELS: Record<EmployeeStatus, string> = {
 };
 
 const STATUS_COLORS: Record<EmployeeStatus, string> = {
-  ACTIVE: 'bg-green-100 text-green-800',
-  ON_LEAVE: 'bg-yellow-100 text-yellow-800',
-  TERMINATED: 'bg-red-100 text-red-800',
+  ACTIVE: 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300',
+  ON_LEAVE: 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-300',
+  TERMINATED: 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300',
+};
+
+// Invite status labels and colors
+const INVITE_LABELS: Record<InviteStatus, string> = {
+  NOT_INVITED: 'Not Invited',
+  PENDING: 'Invite Sent',
+  ACCEPTED: 'Account Active',
+  EXPIRED: 'Invite Expired',
+  REVOKED: 'Invite Revoked',
+};
+
+const INVITE_COLORS: Record<InviteStatus, string> = {
+  NOT_INVITED: 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400',
+  PENDING: 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300',
+  ACCEPTED: 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300',
+  EXPIRED: 'bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-300',
+  REVOKED: 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300',
 };
 
 interface EmployeeModalProps {
   isOpen: boolean;
   onClose: () => void;
   employee?: Employee | null;
-  onSubmit: (data: CreateEmployee | UpdateEmployee) => void;
+  onSubmit: (data: CreateEmployee | UpdateEmployee, sendInvite?: boolean) => void;
   isSubmitting: boolean;
 }
 
@@ -49,6 +66,7 @@ function EmployeeModal({ isOpen, onClose, employee, onSubmit, isSubmitting }: Em
     hourlyRate: employee?.hourlyRate ?? '',
     status: (employee?.status as EmployeeStatus) ?? 'ACTIVE',
   });
+  const [sendInvite, setSendInvite] = useState(!employee); // Default to true for new employees
 
   const [errors, setErrors] = useState<Record<string, string>>({});
 
@@ -64,6 +82,12 @@ function EmployeeModal({ isOpen, onClose, employee, onSubmit, isSubmitting }: Em
       return;
     }
 
+    // If sending invite, email is required
+    if (sendInvite && !formData.email) {
+      setErrors({ email: 'Email is required to send an invite' });
+      return;
+    }
+
     const data: CreateEmployee | UpdateEmployee = {
       firstName: formData.firstName,
       lastName: formData.lastName,
@@ -76,7 +100,7 @@ function EmployeeModal({ isOpen, onClose, employee, onSubmit, isSubmitting }: Em
       status: formData.status as EmployeeStatus,
     };
 
-    onSubmit(data);
+    onSubmit(data, sendInvite);
   };
 
   return (
@@ -203,6 +227,27 @@ function EmployeeModal({ isOpen, onClose, employee, onSubmit, isSubmitting }: Em
             </div>
           )}
 
+          {/* Send invite checkbox for new employees */}
+          {!employee && (
+            <div className="flex items-start gap-3 p-4 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-200 dark:border-blue-800">
+              <input
+                type="checkbox"
+                id="sendInvite"
+                checked={sendInvite}
+                onChange={(e) => setSendInvite(e.target.checked)}
+                className="mt-1 h-4 w-4 text-primary border-gray-300 rounded focus:ring-primary"
+              />
+              <div>
+                <label htmlFor="sendInvite" className="font-medium text-blue-900 dark:text-blue-100">
+                  Send invite email
+                </label>
+                <p className="text-sm text-blue-700 dark:text-blue-300">
+                  The employee will receive an email to create their account and set a password.
+                </p>
+              </div>
+            </div>
+          )}
+
           <div className="flex justify-end gap-2 pt-4">
             <button
               type="button"
@@ -231,6 +276,7 @@ export default function EmployeesPage() {
   const createEmployee = useCreateEmployee(currentFarmId ?? '');
   const updateEmployee = useUpdateEmployee(currentFarmId ?? '');
   const deleteEmployee = useDeleteEmployee(currentFarmId ?? '');
+  const sendInvite = useSendEmployeeInvite(currentFarmId ?? '');
 
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingEmployee, setEditingEmployee] = useState<Employee | null>(null);
@@ -262,16 +308,34 @@ export default function EmployeesPage() {
     setEditingEmployee(null);
   };
 
-  const handleSubmit = async (data: CreateEmployee | UpdateEmployee) => {
+  const handleSubmit = async (data: CreateEmployee | UpdateEmployee, shouldSendInvite?: boolean) => {
     try {
       if (editingEmployee) {
         await updateEmployee.mutateAsync({ employeeId: editingEmployee.id, data: data as UpdateEmployee });
       } else {
-        await createEmployee.mutateAsync(data as CreateEmployee);
+        const newEmployee = await createEmployee.mutateAsync(data as CreateEmployee);
+        // Send invite after creation if requested
+        if (shouldSendInvite && newEmployee?.id) {
+          await sendInvite.mutateAsync(newEmployee.id);
+        }
       }
       handleCloseModal();
     } catch (error) {
       console.error('Failed to save employee:', error);
+    }
+  };
+
+  const handleSendInvite = async (employee: Employee) => {
+    if (!employee.email) {
+      alert('Employee must have an email address to receive an invite.');
+      return;
+    }
+    try {
+      await sendInvite.mutateAsync(employee.id);
+      alert(`Invite sent to ${employee.email}`);
+    } catch (error) {
+      console.error('Failed to send invite:', error);
+      alert('Failed to send invite. Please try again.');
     }
   };
 
@@ -370,57 +434,89 @@ export default function EmployeesPage() {
                 <th className="text-left px-4 py-3 font-medium">Name</th>
                 <th className="text-left px-4 py-3 font-medium">Position</th>
                 <th className="text-left px-4 py-3 font-medium">Contact</th>
+                <th className="text-left px-4 py-3 font-medium">Account</th>
                 <th className="text-left px-4 py-3 font-medium">Status</th>
                 <th className="text-right px-4 py-3 font-medium">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y">
-              {filteredEmployees.map((employee) => (
-                <tr key={employee.id} className="hover:bg-muted/30">
-                  <td className="px-4 py-3">
-                    <div className="font-medium">
-                      {employee.firstName} {employee.lastName}
-                    </div>
-                    {employee.department && (
-                      <div className="text-sm text-muted-foreground">{employee.department}</div>
-                    )}
-                  </td>
-                  <td className="px-4 py-3">
-                    {employee.position && (
-                      <span className={`inline-flex px-2 py-1 text-xs font-medium rounded-full ${POSITION_COLORS[employee.position as EmployeePosition] ?? 'bg-gray-100 text-gray-800'}`}>
-                        {POSITION_LABELS[employee.position as EmployeePosition] ?? employee.position}
+              {filteredEmployees.map((employee) => {
+                const inviteStatus = (employee.inviteStatus as InviteStatus) || 'NOT_INVITED';
+                const canSendInvite = employee.email && (inviteStatus === 'NOT_INVITED' || inviteStatus === 'EXPIRED' || inviteStatus === 'REVOKED');
+                const canResendInvite = employee.email && inviteStatus === 'PENDING';
+
+                return (
+                  <tr key={employee.id} className="hover:bg-muted/30">
+                    <td className="px-4 py-3">
+                      <div className="font-medium">
+                        {employee.firstName} {employee.lastName}
+                      </div>
+                      {employee.department && (
+                        <div className="text-sm text-muted-foreground">{employee.department}</div>
+                      )}
+                    </td>
+                    <td className="px-4 py-3">
+                      {employee.position && (
+                        <span className={`inline-flex px-2 py-1 text-xs font-medium rounded-full ${POSITION_COLORS[employee.position as EmployeePosition] ?? 'bg-gray-100 text-gray-800'}`}>
+                          {POSITION_LABELS[employee.position as EmployeePosition] ?? employee.position}
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className="text-sm">
+                        {employee.email && <div>{employee.email}</div>}
+                        {employee.phone && <div className="text-muted-foreground">{employee.phone}</div>}
+                      </div>
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className="flex flex-col gap-1">
+                        <span className={`inline-flex w-fit px-2 py-1 text-xs font-medium rounded-full ${INVITE_COLORS[inviteStatus]}`}>
+                          {INVITE_LABELS[inviteStatus]}
+                        </span>
+                        {canSendInvite && (
+                          <button
+                            onClick={() => handleSendInvite(employee)}
+                            disabled={sendInvite.isPending}
+                            className="text-xs text-primary hover:underline w-fit"
+                          >
+                            Send Invite
+                          </button>
+                        )}
+                        {canResendInvite && (
+                          <button
+                            onClick={() => handleSendInvite(employee)}
+                            disabled={sendInvite.isPending}
+                            className="text-xs text-primary hover:underline w-fit"
+                          >
+                            Resend Invite
+                          </button>
+                        )}
+                      </div>
+                    </td>
+                    <td className="px-4 py-3">
+                      <span className={`inline-flex px-2 py-1 text-xs font-medium rounded-full ${STATUS_COLORS[employee.status]}`}>
+                        {STATUS_LABELS[employee.status]}
                       </span>
-                    )}
-                  </td>
-                  <td className="px-4 py-3">
-                    <div className="text-sm">
-                      {employee.email && <div>{employee.email}</div>}
-                      {employee.phone && <div className="text-muted-foreground">{employee.phone}</div>}
-                    </div>
-                  </td>
-                  <td className="px-4 py-3">
-                    <span className={`inline-flex px-2 py-1 text-xs font-medium rounded-full ${STATUS_COLORS[employee.status]}`}>
-                      {STATUS_LABELS[employee.status]}
-                    </span>
-                  </td>
-                  <td className="px-4 py-3 text-right">
-                    <button
-                      onClick={() => handleEditEmployee(employee)}
-                      className="text-sm text-primary hover:underline mr-3"
-                    >
-                      Edit
-                    </button>
-                    {employee.status !== 'TERMINATED' && (
+                    </td>
+                    <td className="px-4 py-3 text-right">
                       <button
-                        onClick={() => handleDeleteEmployee(employee)}
-                        className="text-sm text-red-600 hover:underline"
+                        onClick={() => handleEditEmployee(employee)}
+                        className="text-sm text-primary hover:underline mr-3"
                       >
-                        Terminate
+                        Edit
                       </button>
-                    )}
-                  </td>
-                </tr>
-              ))}
+                      {employee.status !== 'TERMINATED' && (
+                        <button
+                          onClick={() => handleDeleteEmployee(employee)}
+                          className="text-sm text-red-600 hover:underline"
+                        >
+                          Terminate
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>

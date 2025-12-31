@@ -8,6 +8,10 @@ export type EmployeePosition = z.infer<typeof EmployeePositionSchema>;
 export const EmployeeStatusSchema = z.enum(['ACTIVE', 'ON_LEAVE', 'TERMINATED']);
 export type EmployeeStatus = z.infer<typeof EmployeeStatusSchema>;
 
+// Invite status for account creation flow
+export const InviteStatusSchema = z.enum(['NOT_INVITED', 'PENDING', 'ACCEPTED', 'EXPIRED', 'REVOKED']);
+export type InviteStatus = z.infer<typeof InviteStatusSchema>;
+
 // Employee schemas
 export const EmployeeSchema = z.object({
   id: z.string().cuid(),
@@ -22,6 +26,12 @@ export const EmployeeSchema = z.object({
   hireDate: z.date().nullable(),
   hourlyRate: z.number().nonnegative().nullable(),
   status: EmployeeStatusSchema,
+  // Invite fields
+  inviteToken: z.string().nullable().optional(),
+  inviteStatus: InviteStatusSchema,
+  inviteExpiresAt: z.date().nullable().optional(),
+  invitedAt: z.date().nullable().optional(),
+  acceptedAt: z.date().nullable().optional(),
   createdAt: z.date(),
   updatedAt: z.date(),
 });

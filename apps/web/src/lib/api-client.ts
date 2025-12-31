@@ -369,6 +369,20 @@ export function useDeleteEmployee(farmId: string) {
   });
 }
 
+export function useSendEmployeeInvite(farmId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (employeeId: string) =>
+      fetchApi<Employee>(`/api/v1/farms/${farmId}/employees/${employeeId}/invite`, {
+        method: 'POST',
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['farms', farmId, 'employees'] });
+    },
+  });
+}
+
 // ============================================================================
 // LAYOUT ELEMENTS
 // ============================================================================

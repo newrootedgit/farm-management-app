@@ -38,6 +38,47 @@ async function main() {
   });
   console.log('Created farm:', farm.name);
 
+  // Create test users for each role level
+  const testUsers = [
+    { email: 'owner@test.com', name: 'Test Owner', role: 'OWNER' as const },
+    { email: 'admin@test.com', name: 'Test Admin', role: 'ADMIN' as const },
+    { email: 'manager@test.com', name: 'Test Manager', role: 'FARM_MANAGER' as const },
+    { email: 'sales@test.com', name: 'Test Salesperson', role: 'SALESPERSON' as const },
+    { email: 'operator@test.com', name: 'Test Operator', role: 'FARM_OPERATOR' as const },
+  ];
+
+  for (const testUser of testUsers) {
+    const createdUser = await prisma.user.upsert({
+      where: { email: testUser.email },
+      update: {},
+      create: {
+        externalId: `test-${testUser.role.toLowerCase()}`,
+        email: testUser.email,
+        name: testUser.name,
+      },
+    });
+
+    // Check if FarmUser relation exists
+    const existingFarmUser = await prisma.farmUser.findFirst({
+      where: {
+        userId: createdUser.id,
+        farmId: farm.id,
+      },
+    });
+
+    if (!existingFarmUser) {
+      await prisma.farmUser.create({
+        data: {
+          userId: createdUser.id,
+          farmId: farm.id,
+          role: testUser.role,
+        },
+      });
+    }
+
+    console.log(`Created test user: ${testUser.email} (${testUser.role})`);
+  }
+
   // Create farm layout
   await prisma.farmLayout.upsert({
     where: { farmId: farm.id },
@@ -100,9 +141,9 @@ async function main() {
 
   // Create some employees
   const employees = [
-    { firstName: 'John', lastName: 'Smith', position: 'Farm Manager', hourlyRate: 25 },
-    { firstName: 'Maria', lastName: 'Garcia', position: 'Field Worker', hourlyRate: 18 },
-    { firstName: 'David', lastName: 'Johnson', position: 'Equipment Operator', hourlyRate: 22 },
+    { firstName: 'John', lastName: 'Smith', position: 'FARM_MANAGER' as const, hourlyRate: 25, email: 'john.smith@example.com' },
+    { firstName: 'Maria', lastName: 'Garcia', position: 'FARM_OPERATOR' as const, hourlyRate: 18, phone: '555-0101' },
+    { firstName: 'David', lastName: 'Johnson', position: 'SALESPERSON' as const, hourlyRate: 22, email: 'david.johnson@example.com' },
   ];
 
   for (const emp of employees) {

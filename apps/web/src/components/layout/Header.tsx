@@ -1,9 +1,23 @@
 import { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useUIStore } from '@/stores/farm-store';
+import { useFarmStore, useUIStore } from '@/stores/farm-store';
+import { useUserStore } from '@/stores/user-store';
+import { useFarm } from '@/lib/api-client';
+
+// Format role for display
+const formatRole = (role: string | undefined): string => {
+  if (!role) return '';
+  return role
+    .split('_')
+    .map((word) => word.charAt(0) + word.slice(1).toLowerCase())
+    .join(' ');
+};
 
 export function Header() {
   const { toggleSidebar } = useUIStore();
+  const { user, logout, darkMode, toggleDarkMode } = useUserStore();
+  const { currentFarmId } = useFarmStore();
+  const { data: currentFarm } = useFarm(currentFarmId ?? undefined);
   const navigate = useNavigate();
   const [showUserMenu, setShowUserMenu] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -20,11 +34,14 @@ export function Header() {
   }, []);
 
   const handleLogout = () => {
-    // For now, just clear local storage and redirect
-    // When Clerk is integrated, this will use Clerk's signOut
-    localStorage.clear();
-    window.location.href = '/';
+    logout();
+    navigate('/login');
   };
+
+  const userInitial = user?.name?.charAt(0).toUpperCase() || user?.email?.charAt(0).toUpperCase() || 'U';
+  const userName = user?.name || 'User';
+  const userEmail = user?.email || 'user@example.com';
+  const userRole = formatRole(currentFarm?.role as string);
 
   return (
     <header className="h-16 border-b bg-card flex items-center justify-between px-6">
@@ -53,11 +70,11 @@ export function Header() {
             className="flex items-center gap-3 p-1 rounded-md hover:bg-accent transition-colors"
           >
             <div className="h-8 w-8 rounded-full bg-primary flex items-center justify-center text-primary-foreground text-sm font-medium">
-              U
+              {userInitial}
             </div>
             <div className="hidden md:block text-sm text-left">
-              <p className="font-medium">User</p>
-              <p className="text-muted-foreground text-xs">user@example.com</p>
+              <p className="font-medium">{userName}</p>
+              <p className="text-muted-foreground text-xs">{userEmail}</p>
             </div>
             <ChevronDownIcon className="h-4 w-4 text-muted-foreground hidden md:block" />
           </button>
@@ -66,19 +83,34 @@ export function Header() {
           {showUserMenu && (
             <div className="absolute right-0 mt-2 w-56 bg-card border rounded-lg shadow-lg py-1 z-50">
               <div className="px-4 py-3 border-b">
-                <p className="text-sm font-medium">User</p>
-                <p className="text-xs text-muted-foreground">user@example.com</p>
+                <p className="text-sm font-medium">{userName}</p>
+                <p className="text-xs text-muted-foreground">{userEmail}</p>
+                {userRole && (
+                  <span className="inline-block mt-1 px-2 py-0.5 text-xs font-medium bg-primary/10 text-primary rounded-full">
+                    {userRole}
+                  </span>
+                )}
               </div>
 
               <button
                 onClick={() => {
                   setShowUserMenu(false);
-                  navigate('/settings');
+                  navigate('/user-settings');
                 }}
                 className="w-full px-4 py-2 text-sm text-left hover:bg-accent flex items-center gap-3"
               >
-                <SettingsIcon className="h-4 w-4" />
-                Settings
+                <UserIcon className="h-4 w-4" />
+                User Settings
+              </button>
+
+              <button
+                onClick={() => {
+                  toggleDarkMode();
+                }}
+                className="w-full px-4 py-2 text-sm text-left hover:bg-accent flex items-center gap-3"
+              >
+                {darkMode ? <SunIcon className="h-4 w-4" /> : <MoonIcon className="h-4 w-4" />}
+                {darkMode ? 'Light Mode' : 'Dark Mode'}
               </button>
 
               <hr className="my-1" />
@@ -122,19 +154,34 @@ function ChevronDownIcon({ className }: { className?: string }) {
   );
 }
 
-function SettingsIcon({ className }: { className?: string }) {
-  return (
-    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor">
-      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-    </svg>
-  );
-}
-
 function LogoutIcon({ className }: { className?: string }) {
   return (
     <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor">
       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+    </svg>
+  );
+}
+
+function UserIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+    </svg>
+  );
+}
+
+function SunIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z" />
+    </svg>
+  );
+}
+
+function MoonIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
     </svg>
   );
 }
