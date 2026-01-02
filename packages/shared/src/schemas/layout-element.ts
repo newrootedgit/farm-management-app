@@ -4,7 +4,7 @@ import { z } from 'zod';
 // ENUMS
 // ============================================================================
 
-export const ElementTypeSchema = z.enum(['WALL', 'SINK', 'TABLE', 'GROW_RACK', 'WALKWAY', 'CIRCLE', 'CUSTOM']);
+export const ElementTypeSchema = z.enum(['WALL', 'DOOR', 'SINK', 'TABLE', 'GROW_RACK', 'WALKWAY', 'CIRCLE', 'CUSTOM']);
 export type ElementType = z.infer<typeof ElementTypeSchema>;
 
 export const UnitSystemSchema = z.enum(['FEET', 'METERS']);
@@ -143,6 +143,7 @@ export type UpdateUserPreference = z.infer<typeof UpdateUserPreferenceSchema>;
 
 export const DEFAULT_ELEMENT_DIMENSIONS = {
   WALL: { thickness: 10 }, // ~4 inches
+  DOOR: { width: 90, height: 10 }, // 3ft door, ~4 inches thick
   SINK: { width: 60, height: 45 }, // Standard utility sink
   TABLE: { width: 120, height: 60 }, // 4ft x 2ft table
   GROW_RACK: { width: 120, height: 60 }, // Standard grow rack footprint
@@ -153,6 +154,7 @@ export const DEFAULT_ELEMENT_DIMENSIONS = {
 // Default colors for each element type
 export const DEFAULT_ELEMENT_COLORS = {
   WALL: '#4a5568', // Gray
+  DOOR: '#8b5a2b', // Brown (wood color)
   SINK: '#3182ce', // Blue
   TABLE: '#805ad5', // Purple
   GROW_RACK: '#38a169', // Green

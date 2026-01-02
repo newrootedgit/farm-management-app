@@ -36,6 +36,17 @@ const BUILT_IN_ELEMENTS: Array<{
     ),
   },
   {
+    type: 'DOOR',
+    label: 'Door',
+    description: 'Door with swing direction arc',
+    icon: (
+      <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4h3v16H4zM7 4h4a2 2 0 012 2v12a2 2 0 01-2 2H7" />
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 12a5 5 0 005-5" strokeDasharray="3 3" />
+      </svg>
+    ),
+  },
+  {
     type: 'WALKWAY',
     label: 'Walkway',
     description: 'Walking path between elements',

@@ -1,7 +1,62 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useCanvasStore, CanvasElement, calculateWallLength, calculateWallAngle } from '@/stores/canvas-store';
 import { fromBaseUnit, toBaseUnit, getUnitLabel, calculateEndpoint } from '@/lib/units';
 import type { UnitSystem } from '@farm/shared';
+
+// Editable number input that only commits on blur/enter
+function EditableNumberInput({
+  value,
+  onChange,
+  min,
+  step = 0.1,
+  className,
+}: {
+  value: number;
+  onChange: (value: number) => void;
+  min?: number;
+  step?: number;
+  className?: string;
+}) {
+  const [localValue, setLocalValue] = useState(value.toFixed(1));
+  const [isFocused, setIsFocused] = useState(false);
+
+  // Update local value when prop changes (but not while editing)
+  useEffect(() => {
+    if (!isFocused) {
+      setLocalValue(value.toFixed(1));
+    }
+  }, [value, isFocused]);
+
+  const handleCommit = () => {
+    const num = parseFloat(localValue);
+    if (!isNaN(num) && (min === undefined || num >= min)) {
+      onChange(num);
+    } else {
+      // Reset to current value if invalid
+      setLocalValue(value.toFixed(1));
+    }
+    setIsFocused(false);
+  };
+
+  return (
+    <input
+      type="number"
+      step={step}
+      min={min}
+      value={localValue}
+      onChange={(e) => setLocalValue(e.target.value)}
+      onFocus={() => setIsFocused(true)}
+      onBlur={handleCommit}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') {
+          handleCommit();
+          (e.target as HTMLInputElement).blur();
+        }
+      }}
+      className={className}
+    />
+  );
+}
 
 const ELEMENT_COLORS = [
   '#4a5568', // Gray (walls)
@@ -160,18 +215,21 @@ export function PropertiesPanel({ element, selectedElements = [], unitSystem = '
   }
 
   const isWall = element.type === 'WALL';
-  const wallLength = isWall ? calculateWallLength(element) : 0;
-  const wallAngle = isWall ? calculateWallAngle(element) : 0;
+  // Line-based walkways also use wall-style properties (startX/startY/endX/endY/thickness)
+  const isLineBasedWalkway = element.type === 'WALKWAY' && element.startX !== undefined;
+  const isLineElement = isWall || isLineBasedWalkway;
+  const lineLength = isLineElement ? calculateWallLength(element) : 0;
+  const lineAngle = isLineElement ? calculateWallAngle(element) : 0;
   const unit = getUnitLabel(unitSystem);
 
-  // Handle wall length change - recalculate endpoint keeping angle constant
-  const handleWallLengthChange = (newLengthInUserUnits: number) => {
+  // Handle line element length change - recalculate endpoint keeping angle constant
+  const handleLineLengthChange = (newLengthInUserUnits: number) => {
     const newLengthInCm = toBaseUnit(newLengthInUserUnits, unitSystem);
     if (newLengthInCm <= 0) return;
 
     const startX = element.startX ?? 0;
     const startY = element.startY ?? 0;
-    const newEnd = calculateEndpoint(startX, startY, wallAngle, newLengthInCm);
+    const newEnd = calculateEndpoint(startX, startY, lineAngle, newLengthInCm);
 
     updateElement(element.id, {
       endX: newEnd.x,
@@ -179,11 +237,11 @@ export function PropertiesPanel({ element, selectedElements = [], unitSystem = '
     });
   };
 
-  // Handle wall angle change - recalculate endpoint keeping length constant
-  const handleWallAngleChange = (newAngle: number) => {
+  // Handle line element angle change - recalculate endpoint keeping length constant
+  const handleLineAngleChange = (newAngle: number) => {
     const startX = element.startX ?? 0;
     const startY = element.startY ?? 0;
-    const newEnd = calculateEndpoint(startX, startY, newAngle, wallLength);
+    const newEnd = calculateEndpoint(startX, startY, newAngle, lineLength);
 
     updateElement(element.id, {
       endX: newEnd.x,
@@ -220,20 +278,18 @@ export function PropertiesPanel({ element, selectedElements = [], unitSystem = '
         />
       </div>
 
-      {/* Wall-specific properties */}
-      {isWall && (
+      {/* Line element properties (walls and line-based walkways) */}
+      {isLineElement && (
         <>
           {/* Length - editable */}
           <div>
             <label className="block text-sm font-medium mb-1">
               Length ({unit})
             </label>
-            <input
-              type="number"
-              step="0.1"
-              min="0.1"
-              value={fromBaseUnit(wallLength, unitSystem).toFixed(1)}
-              onChange={(e) => handleWallLengthChange(Number(e.target.value))}
+            <EditableNumberInput
+              value={fromBaseUnit(lineLength, unitSystem)}
+              onChange={handleLineLengthChange}
+              min={0.1}
               className="w-full px-3 py-2 border rounded-md bg-background text-sm"
             />
           </div>
@@ -246,16 +302,16 @@ export function PropertiesPanel({ element, selectedElements = [], unitSystem = '
                 type="range"
                 min="-180"
                 max="180"
-                value={Math.round(wallAngle)}
-                onChange={(e) => handleWallAngleChange(Number(e.target.value))}
+                value={Math.round(lineAngle)}
+                onChange={(e) => handleLineAngleChange(Number(e.target.value))}
                 className="flex-1"
               />
               <input
                 type="number"
                 min="-180"
                 max="180"
-                value={Math.round(wallAngle)}
-                onChange={(e) => handleWallAngleChange(Number(e.target.value))}
+                value={Math.round(lineAngle)}
+                onChange={(e) => handleLineAngleChange(Number(e.target.value))}
                 className="w-16 px-2 py-1 border rounded-md bg-background text-sm text-right"
               />
               <span className="text-sm">°</span>
@@ -265,20 +321,19 @@ export function PropertiesPanel({ element, selectedElements = [], unitSystem = '
             </div>
           </div>
 
-          {/* Thickness */}
+          {/* Thickness/Width */}
           <div>
             <label className="block text-sm font-medium mb-1">
-              Thickness ({unit})
+              {isLineBasedWalkway ? 'Width' : 'Thickness'} ({unit})
             </label>
-            <input
-              type="number"
-              step="0.1"
-              value={fromBaseUnit(element.thickness ?? 10, unitSystem).toFixed(1)}
-              onChange={(e) =>
+            <EditableNumberInput
+              value={fromBaseUnit(element.thickness ?? (isLineBasedWalkway ? 90 : 10), unitSystem)}
+              onChange={(val) =>
                 updateElement(element.id, {
-                  thickness: toBaseUnit(Number(e.target.value), unitSystem),
+                  thickness: toBaseUnit(val, unitSystem),
                 })
               }
+              min={0.1}
               className="w-full px-3 py-2 border rounded-md bg-background text-sm"
             />
           </div>
@@ -342,15 +397,15 @@ export function PropertiesPanel({ element, selectedElements = [], unitSystem = '
         </>
       )}
 
-      {/* Rectangle element properties */}
-      {!isWall && (
+      {/* Rectangle element properties (not for walls or line-based walkways) */}
+      {!isLineElement && (
         <RectangleElementProperties
           element={element}
           defaultUnitSystem={unitSystem}
           updateElement={updateElement}
         />
       )}
-      {!isWall && (
+      {!isLineElement && (
         <>
 
           {/* Position */}
@@ -409,6 +464,48 @@ export function PropertiesPanel({ element, selectedElements = [], unitSystem = '
               <span className="text-sm">°</span>
             </div>
           </div>
+
+          {/* Door specific properties */}
+          {element.type === 'DOOR' && (
+            <div className="space-y-3 p-3 bg-muted/50 rounded-md">
+              <label className="block text-sm font-medium">Door Swing</label>
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="text-xs text-muted-foreground">Hinge Side</label>
+                  <select
+                    value={(element.metadata?.swingDirection as string) ?? 'left'}
+                    onChange={(e) =>
+                      updateElement(element.id, {
+                        metadata: { ...element.metadata, swingDirection: e.target.value },
+                      })
+                    }
+                    className="w-full px-2 py-1.5 border rounded-md bg-background text-sm"
+                  >
+                    <option value="left">Left</option>
+                    <option value="right">Right</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="text-xs text-muted-foreground">Swing Direction</label>
+                  <select
+                    value={(element.metadata?.swingAngle as string) ?? 'in'}
+                    onChange={(e) =>
+                      updateElement(element.id, {
+                        metadata: { ...element.metadata, swingAngle: e.target.value },
+                      })
+                    }
+                    className="w-full px-2 py-1.5 border rounded-md bg-background text-sm"
+                  >
+                    <option value="in">Inward</option>
+                    <option value="out">Outward</option>
+                  </select>
+                </div>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Position door against a wall and rotate to align.
+              </p>
+            </div>
+          )}
 
           {/* Grow Rack specific properties */}
           {element.type === 'GROW_RACK' && (
@@ -534,7 +631,7 @@ export function PropertiesPanel({ element, selectedElements = [], unitSystem = '
       </div>
 
       {/* Save as Preset - for reusable elements */}
-      {onSaveAsPreset && !isWall && (
+      {onSaveAsPreset && !isLineElement && (
         <div className="pt-4 border-t">
           <button
             onClick={() => onSaveAsPreset(element)}

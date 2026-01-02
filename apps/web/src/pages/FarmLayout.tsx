@@ -68,6 +68,7 @@ export default function FarmLayout() {
   const [editingGrowRack, setEditingGrowRack] = useState<CanvasElement | null>(null);
   const [presetManagerOpen, setPresetManagerOpen] = useState(false);
   const [clipboard, setClipboard] = useState<CanvasElement[]>([]);
+  const [saveNotification, setSaveNotification] = useState<string | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
   // Sync API elements to canvas store on load
@@ -330,6 +331,13 @@ export default function FarmLayout() {
         setActiveTool('pan');
         return;
       }
+
+      // M = Measure tool
+      if (e.key === 'm' || e.key === 'M') {
+        e.preventDefault();
+        setActiveTool('measure');
+        return;
+      }
     };
 
     window.addEventListener('keydown', handleKeyDown);
@@ -418,8 +426,14 @@ export default function FarmLayout() {
       }
 
       setDirty(false);
+
+      // Show success notification
+      setSaveNotification('Layout saved successfully!');
+      setTimeout(() => setSaveNotification(null), 3000);
     } catch (error) {
       console.error('Failed to save layout:', error);
+      setSaveNotification('Failed to save layout');
+      setTimeout(() => setSaveNotification(null), 3000);
     }
   }, [currentFarmId, layout, elements, apiElements, updateLayout, createElement, bulkUpdateElements, setDirty]);
 
@@ -578,6 +592,9 @@ export default function FarmLayout() {
         <span className="inline-flex items-center gap-1">
           <kbd className="px-1.5 py-0.5 bg-muted rounded text-xs">H</kbd> Pan
         </span>
+        <span className="inline-flex items-center gap-1">
+          <kbd className="px-1.5 py-0.5 bg-muted rounded text-xs">M</kbd> Measure
+        </span>
         <span className="text-border">|</span>
         <span className="inline-flex items-center gap-1">
           <kbd className="px-1.5 py-0.5 bg-muted rounded text-xs">⌘/⇧+Click</kbd> Multi-select
@@ -605,6 +622,19 @@ export default function FarmLayout() {
           <kbd className="px-1.5 py-0.5 bg-muted rounded text-xs">Esc</kbd> Cancel
         </span>
       </div>
+
+      {/* Save notification */}
+      {saveNotification && (
+        <div
+          className={`fixed top-4 right-4 z-50 px-4 py-2 rounded-lg shadow-lg text-sm font-medium ${
+            saveNotification.includes('Failed')
+              ? 'bg-red-100 text-red-800 border border-red-200'
+              : 'bg-green-100 text-green-800 border border-green-200'
+          }`}
+        >
+          {saveNotification}
+        </div>
+      )}
 
       {/* Tutorial overlay */}
       {showTutorial && (

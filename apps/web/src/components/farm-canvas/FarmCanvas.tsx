@@ -1,5 +1,5 @@
 import { useRef, useCallback, useState, useLayoutEffect } from 'react';
-import { Stage, Layer, Rect, Line, Group, Text, Circle, Transformer } from 'react-konva';
+import { Stage, Layer, Rect, Line, Group, Text, Circle, Transformer, Arc, Label, Tag } from 'react-konva';
 import type { KonvaEventObject } from 'konva/lib/Node';
 import type Konva from 'konva';
 import {
@@ -11,6 +11,26 @@ import {
 import { DEFAULT_ELEMENT_COLORS, DEFAULT_ELEMENT_DIMENSIONS } from '@farm/shared';
 import type { UnitSystem, ElementPreset } from '@farm/shared';
 import { getGridSizeForUnit, getUnitLabel } from '@/lib/units';
+
+// Format distance in the appropriate unit (convert from cm to feet or meters)
+function formatDistance(distanceCm: number, unitSystem: UnitSystem): string {
+  if (unitSystem === 'FEET') {
+    // Convert cm to feet (30.48 cm per foot)
+    const feet = distanceCm / 30.48;
+    if (feet < 1) {
+      const inches = feet * 12;
+      return `${inches.toFixed(1)}"`;
+    }
+    return `${feet.toFixed(1)}'`;
+  } else {
+    // Convert cm to meters
+    const meters = distanceCm / 100;
+    if (meters < 1) {
+      return `${distanceCm.toFixed(0)}cm`;
+    }
+    return `${meters.toFixed(2)}m`;
+  }
+}
 
 interface FarmCanvasProps {
   width: number;
@@ -57,6 +77,13 @@ export function FarmCanvas({
     setWallStartPoint,
     setWallIsDrawing,
     resetWallDrawing,
+    walkwayDrawing,
+    setWalkwayStartPoint,
+    setWalkwayIsDrawing,
+    resetWalkwayDrawing,
+    measureState,
+    addMeasurePoint,
+    clearMeasure,
     pushHistory,
   } = useCanvasStore();
 
@@ -77,6 +104,14 @@ export function FarmCanvas({
     endY: number;
   } | null>(null);
 
+  // Walkway preview state
+  const [walkwayPreview, setWalkwayPreview] = useState<{
+    startX: number;
+    startY: number;
+    endX: number;
+    endY: number;
+  } | null>(null);
+
   // Snap indicator state
   const [snapIndicator, setSnapIndicator] = useState<{ x: number; y: number } | null>(null);
 
@@ -87,16 +122,35 @@ export function FarmCanvas({
   // Track when the selected shape ref changes to trigger transformer update
   const [transformerKey, setTransformerKey] = useState(0);
 
+  // Notification state for user feedback
+  const [notification, setNotification] = useState<{ message: string; type: 'error' | 'info' } | null>(null);
+
+  // Distance indicator state for showing distances while dragging
+  const [distanceGuides, setDistanceGuides] = useState<Array<{
+    x1: number;
+    y1: number;
+    x2: number;
+    y2: number;
+    distance: number;
+    direction: 'horizontal' | 'vertical';
+  }>>([]);
+
+  // Show notification helper
+  const showNotification = useCallback((message: string, type: 'error' | 'info' = 'info') => {
+    setNotification({ message, type });
+    setTimeout(() => setNotification(null), 3000);
+  }, []);
+
   // Update transformer when selection changes - use useLayoutEffect to run after ref callbacks
   useLayoutEffect(() => {
     if (transformerRef.current) {
-      // Get all selected non-wall shapes
+      // Get all selected shapes (excluding walls and doors which have custom controls)
       const selectedNodes: Konva.Group[] = [];
       for (const id of selectedIds) {
         const node = selectedShapesRef.current.get(id);
         const element = elements.find((e) => e.id === id);
-        // Only add non-wall elements to transformer
-        if (node && element && element.type !== 'WALL') {
+        // Only add non-wall, non-door elements to transformer
+        if (node && element && element.type !== 'WALL' && element.type !== 'DOOR') {
           selectedNodes.push(node);
         }
       }
@@ -176,6 +230,210 @@ export function FarmCanvas({
     [snapToGrid, unitGridSize, findNearbyWallEndpoint]
   );
 
+  // Helper to get element bounds (works for both line-based and rectangle elements)
+  const getElementBounds = useCallback((el: CanvasElement): { x: number; y: number; width: number; height: number } => {
+    // Line-based elements (walls, line-based walkways)
+    if (el.type === 'WALL' || (el.type === 'WALKWAY' && el.startX !== undefined)) {
+      const startX = el.startX ?? 0;
+      const startY = el.startY ?? 0;
+      const endX = el.endX ?? 0;
+      const endY = el.endY ?? 0;
+      const thickness = el.thickness ?? 10;
+      const halfT = thickness / 2;
+
+      // Get bounding box of the line
+      const minX = Math.min(startX, endX) - halfT;
+      const minY = Math.min(startY, endY) - halfT;
+      const maxX = Math.max(startX, endX) + halfT;
+      const maxY = Math.max(startY, endY) + halfT;
+
+      return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
+    }
+
+    // Rectangle-based elements (doors use center positioning)
+    if (el.type === 'DOOR') {
+      const w = el.width ?? 90;
+      const h = el.height ?? 10;
+      return {
+        x: (el.x ?? 0) - w / 2,
+        y: (el.y ?? 0) - h / 2,
+        width: w,
+        height: h,
+      };
+    }
+
+    // Standard rectangle elements
+    return {
+      x: el.x ?? 0,
+      y: el.y ?? 0,
+      width: el.width ?? 100,
+      height: el.height ?? 60,
+    };
+  }, []);
+
+  // Calculate distance guides for dragged element
+  const calculateDistanceGuides = useCallback((
+    elementId: string,
+    currentBounds: { x: number; y: number; width: number; height: number }
+  ) => {
+    const guides: Array<{
+      x1: number; y1: number;
+      x2: number; y2: number;
+      distance: number;
+      direction: 'horizontal' | 'vertical';
+    }> = [];
+
+    const threshold = 300; // Only show for elements within this distance
+
+    let closestLeft: typeof guides[0] | null = null;
+    let closestRight: typeof guides[0] | null = null;
+    let closestTop: typeof guides[0] | null = null;
+    let closestBottom: typeof guides[0] | null = null;
+
+    for (const el of elements) {
+      if (el.id === elementId) continue;
+
+      const targetBounds = getElementBounds(el);
+
+      // Calculate distances between edges
+      const draggedLeft = currentBounds.x;
+      const draggedRight = currentBounds.x + currentBounds.width;
+      const draggedTop = currentBounds.y;
+      const draggedBottom = currentBounds.y + currentBounds.height;
+
+      const targetLeft = targetBounds.x;
+      const targetRight = targetBounds.x + targetBounds.width;
+      const targetTop = targetBounds.y;
+      const targetBottom = targetBounds.y + targetBounds.height;
+
+      // Check vertical overlap (for horizontal distance measurement)
+      const verticalOverlap = draggedBottom > targetTop && draggedTop < targetBottom;
+
+      // Check horizontal overlap (for vertical distance measurement)
+      const horizontalOverlap = draggedRight > targetLeft && draggedLeft < targetRight;
+
+      if (verticalOverlap) {
+        // Distance from dragged right edge to target left edge (target is to the right)
+        if (targetLeft >= draggedRight) {
+          const dist = targetLeft - draggedRight;
+          if (dist < threshold && (!closestRight || dist < closestRight.distance)) {
+            const y = Math.max(draggedTop, targetTop) +
+                     (Math.min(draggedBottom, targetBottom) - Math.max(draggedTop, targetTop)) / 2;
+            closestRight = {
+              x1: draggedRight, y1: y,
+              x2: targetLeft, y2: y,
+              distance: dist,
+              direction: 'horizontal',
+            };
+          }
+        }
+
+        // Distance from dragged left edge to target right edge (target is to the left)
+        if (targetRight <= draggedLeft) {
+          const dist = draggedLeft - targetRight;
+          if (dist < threshold && (!closestLeft || dist < closestLeft.distance)) {
+            const y = Math.max(draggedTop, targetTop) +
+                     (Math.min(draggedBottom, targetBottom) - Math.max(draggedTop, targetTop)) / 2;
+            closestLeft = {
+              x1: targetRight, y1: y,
+              x2: draggedLeft, y2: y,
+              distance: dist,
+              direction: 'horizontal',
+            };
+          }
+        }
+      }
+
+      if (horizontalOverlap) {
+        // Distance from dragged bottom to target top (target is below)
+        if (targetTop >= draggedBottom) {
+          const dist = targetTop - draggedBottom;
+          if (dist < threshold && (!closestBottom || dist < closestBottom.distance)) {
+            const x = Math.max(draggedLeft, targetLeft) +
+                     (Math.min(draggedRight, targetRight) - Math.max(draggedLeft, targetLeft)) / 2;
+            closestBottom = {
+              x1: x, y1: draggedBottom,
+              x2: x, y2: targetTop,
+              distance: dist,
+              direction: 'vertical',
+            };
+          }
+        }
+
+        // Distance from dragged top to target bottom (target is above)
+        if (targetBottom <= draggedTop) {
+          const dist = draggedTop - targetBottom;
+          if (dist < threshold && (!closestTop || dist < closestTop.distance)) {
+            const x = Math.max(draggedLeft, targetLeft) +
+                     (Math.min(draggedRight, targetRight) - Math.max(draggedLeft, targetLeft)) / 2;
+            closestTop = {
+              x1: x, y1: targetBottom,
+              x2: x, y2: draggedTop,
+              distance: dist,
+              direction: 'vertical',
+            };
+          }
+        }
+      }
+    }
+
+    // Collect only the closest guides
+    if (closestLeft) guides.push(closestLeft);
+    if (closestRight) guides.push(closestRight);
+    if (closestTop) guides.push(closestTop);
+    if (closestBottom) guides.push(closestBottom);
+
+    setDistanceGuides(guides);
+  }, [elements, getElementBounds]);
+
+  // Find wall at exact click position (for placing doors)
+  const findWallAtPosition = useCallback(
+    (clickX: number, clickY: number, doorWidth: number): { wall: CanvasElement; position: number; snapX: number; snapY: number; angle: number } | null => {
+      const snapDistance = 40; // Must click reasonably close to wall
+      let nearestWall: { wall: CanvasElement; position: number; snapX: number; snapY: number; angle: number } | null = null;
+      let nearestDist = Infinity;
+
+      for (const el of elements) {
+        if (el.type !== 'WALL') continue;
+
+        const startX = el.startX ?? 0;
+        const startY = el.startY ?? 0;
+        const endX = el.endX ?? 0;
+        const endY = el.endY ?? 0;
+
+        const wallDx = endX - startX;
+        const wallDy = endY - startY;
+        const wallLength = Math.sqrt(wallDx * wallDx + wallDy * wallDy);
+        if (wallLength < doorWidth) continue;
+
+        // Find closest point on wall line to click
+        const t = Math.max(0, Math.min(1, ((clickX - startX) * wallDx + (clickY - startY) * wallDy) / (wallLength * wallLength)));
+        const closestX = startX + t * wallDx;
+        const closestY = startY + t * wallDy;
+        const dist = Math.sqrt((clickX - closestX) ** 2 + (clickY - closestY) ** 2);
+
+        if (dist < snapDistance && dist < nearestDist) {
+          // Check if door fits at this position
+          const halfDoorInWallUnits = (doorWidth / 2) / wallLength;
+          if (t >= halfDoorInWallUnits && t <= 1 - halfDoorInWallUnits) {
+            nearestDist = dist;
+            const angle = Math.atan2(wallDy, wallDx) * (180 / Math.PI);
+            nearestWall = {
+              wall: el,
+              position: t,
+              snapX: closestX,
+              snapY: closestY,
+              angle: angle,
+            };
+          }
+        }
+      }
+
+      return nearestWall;
+    },
+    [elements]
+  );
+
   // Handle zoom with mouse wheel
   const handleWheel = useCallback(
     (e: KonvaEventObject<WheelEvent>) => {
@@ -230,7 +488,19 @@ export function FarmCanvas({
             endY: snappedPos.y,
           });
         }
-      } else if (activeTool === 'element' && activeElementType && activeElementType !== 'WALL') {
+      } else if (activeTool === 'element' && activeElementType === 'WALKWAY') {
+        // Walkway drawing - like walls, click-drag to draw a line
+        if (!walkwayDrawing.startPoint) {
+          setWalkwayStartPoint(snappedPos);
+          setWalkwayIsDrawing(true);
+          setWalkwayPreview({
+            startX: snappedPos.x,
+            startY: snappedPos.y,
+            endX: snappedPos.x,
+            endY: snappedPos.y,
+          });
+        }
+      } else if (activeTool === 'element' && activeElementType && activeElementType !== 'WALL' && activeElementType !== 'WALKWAY') {
         // Place rectangle element - use preset data if available
         const activePreset = activePresetId ? presets.find((p) => p.id === activePresetId) : null;
         const defaults =
@@ -241,22 +511,72 @@ export function FarmCanvas({
         const defaultColor = activePreset?.defaultColor ?? DEFAULT_ELEMENT_COLORS[activeElementType as keyof typeof DEFAULT_ELEMENT_COLORS] ?? '#666666';
         const elementName = activePreset?.name ?? `${activeElementType.replace('_', ' ')} ${elements.length + 1}`;
 
-        const newElement: CanvasElement = {
-          id: generateId('el'),
-          name: elementName,
-          type: activeElementType,
-          x: snappedPos.x,
-          y: snappedPos.y,
-          width: defaultWidth,
-          height: defaultHeight,
-          rotation: 0,
-          color: defaultColor,
-          opacity: 1,
-          presetId: activePresetId ?? undefined,
-        };
-        addElement(newElement);
-        setSelectedId(newElement.id, 'element');
-        onElementSelect?.(newElement);
+        // Special handling for DOOR - must click directly on a wall
+        if (activeElementType === 'DOOR') {
+          const doorWidth = defaultWidth as number;
+          const doorHeight = defaultHeight as number;
+
+          // Check if any walls exist
+          const walls = elements.filter(el => el.type === 'WALL');
+          if (walls.length === 0) {
+            showNotification('Draw a wall first before adding doors', 'error');
+            return;
+          }
+
+          // Find wall at click position (tight snap distance of 25px)
+          const wallSnap = findWallAtPosition(snappedPos.x, snappedPos.y, doorWidth);
+
+          if (!wallSnap) {
+            showNotification('Click directly on a wall to place a door', 'info');
+            return;
+          }
+
+          const newDoor: CanvasElement = {
+            id: generateId('door'),
+            name: elementName,
+            type: 'DOOR',
+            // Store center position - renderDoor will use offset for rotation
+            x: wallSnap.snapX,
+            y: wallSnap.snapY,
+            width: doorWidth,
+            height: doorHeight,
+            rotation: wallSnap.angle,
+            color: defaultColor,
+            opacity: 1,
+            metadata: {
+              attachedWallId: wallSnap.wall.id,
+              wallPosition: wallSnap.position,
+              swingDirection: 'left',
+              swingAngle: 'in',
+            },
+          };
+          addElement(newDoor);
+          setSelectedId(newDoor.id, 'element');
+          onElementSelect?.(newDoor);
+        } else {
+          const newElement: CanvasElement = {
+            id: generateId('el'),
+            name: elementName,
+            type: activeElementType,
+            x: snappedPos.x,
+            y: snappedPos.y,
+            width: defaultWidth,
+            height: defaultHeight,
+            rotation: 0,
+            color: defaultColor,
+            opacity: 1,
+            presetId: activePresetId ?? undefined,
+          };
+          addElement(newElement);
+          setSelectedId(newElement.id, 'element');
+          onElementSelect?.(newElement);
+        }
+      } else if (activeTool === 'measure') {
+        // In measure mode, clicking on empty canvas clears the measurement
+        const clickedOnEmpty = e.target === e.target.getStage();
+        if (clickedOnEmpty) {
+          clearMeasure();
+        }
       } else if (activeTool === 'select') {
         // Check if clicked on empty space
         const clickedOnEmpty = e.target === e.target.getStage();
@@ -297,6 +617,9 @@ export function FarmCanvas({
       onElementSelect,
       onMultiSelect,
       presets,
+      findWallAtPosition,
+      showNotification,
+      clearMeasure,
     ]
   );
 
@@ -340,11 +663,21 @@ export function FarmCanvas({
           endX: snappedPos.x,
           endY: snappedPos.y,
         });
+      } else if (walkwayDrawing.startPoint && walkwayDrawing.isDrawing) {
+        const scaledPos = getScaledPos();
+        const snappedPos = snapPosition(scaledPos);
+
+        setWalkwayPreview({
+          startX: walkwayDrawing.startPoint.x,
+          startY: walkwayDrawing.startPoint.y,
+          endX: snappedPos.x,
+          endY: snappedPos.y,
+        });
       } else {
         setSnapIndicator(null);
       }
     },
-    [activeTool, wallDrawing, getScaledPos, snapPosition, findNearbyWallEndpoint, isMiddleMousePanning, panOffset, setPanOffset, isMarqueeSelecting, marquee]
+    [activeTool, wallDrawing, walkwayDrawing, getScaledPos, snapPosition, findNearbyWallEndpoint, isMiddleMousePanning, panOffset, setPanOffset, isMarqueeSelecting, marquee]
   );
 
   // Handle mouse up
@@ -433,16 +766,51 @@ export function FarmCanvas({
         setWallPreview(null);
         setSnapIndicator(null);
       }
+
+      // Handle walkway drawing completion
+      if (walkwayDrawing.startPoint && walkwayDrawing.isDrawing) {
+        const scaledPos = getScaledPos();
+        const endPos = snapPosition(scaledPos);
+
+        // Calculate distance
+        const dx = endPos.x - walkwayDrawing.startPoint.x;
+        const dy = endPos.y - walkwayDrawing.startPoint.y;
+        const distance = Math.sqrt(dx * dx + dy * dy);
+
+        // Only create walkway if it has some length
+        if (distance > 10) {
+          const newWalkway: CanvasElement = {
+            id: generateId('walkway'),
+            name: `Walkway ${elements.filter((el) => el.type === 'WALKWAY').length + 1}`,
+            type: 'WALKWAY',
+            startX: walkwayDrawing.startPoint.x,
+            startY: walkwayDrawing.startPoint.y,
+            endX: endPos.x,
+            endY: endPos.y,
+            thickness: DEFAULT_ELEMENT_DIMENSIONS.WALKWAY.width, // Use width as thickness for line-based walkway
+            color: DEFAULT_ELEMENT_COLORS.WALKWAY,
+            opacity: 1,
+          };
+          addElement(newWalkway);
+          setSelectedId(newWalkway.id, 'element');
+          onElementSelect?.(newWalkway);
+        }
+
+        resetWalkwayDrawing();
+        setWalkwayPreview(null);
+      }
     },
     [
       activeTool,
       elements,
       wallDrawing,
+      walkwayDrawing,
       getScaledPos,
       snapPosition,
       addElement,
       setSelectedId,
       resetWallDrawing,
+      resetWalkwayDrawing,
       onElementSelect,
       onMultiSelect,
       isMiddleMousePanning,
@@ -462,6 +830,13 @@ export function FarmCanvas({
   // Handle element click - supports Cmd/Shift for multi-select
   const handleElementClick = useCallback(
     (element: CanvasElement, e: KonvaEventObject<MouseEvent>) => {
+      if (activeTool === 'measure') {
+        // In measure mode, clicking an element adds the click point to measurement
+        const clickPoint = getScaledPos();
+        addMeasurePoint(element.id, clickPoint);
+        return;
+      }
+
       if (activeTool === 'select') {
         const hasModifier = e.evt.shiftKey || e.evt.metaKey || e.evt.ctrlKey;
 
@@ -493,7 +868,7 @@ export function FarmCanvas({
         setTransformerKey((k) => k + 1);
       }
     },
-    [activeTool, setSelectedId, toggleSelection, selectedIds, elements, onElementSelect, onMultiSelect]
+    [activeTool, setSelectedId, toggleSelection, selectedIds, elements, onElementSelect, onMultiSelect, addMeasurePoint, getScaledPos]
   );
 
   // Handle drag start - push history so we can undo
@@ -501,20 +876,54 @@ export function FarmCanvas({
     pushHistory();
   }, [pushHistory]);
 
-  // Handle element drag (for non-wall elements like tables, sinks, etc.)
+  // Handle element drag (for non-wall elements like tables, sinks, etc.) - moves all selected elements
   const handleElementDragEnd = useCallback(
     (element: CanvasElement, e: KonvaEventObject<DragEvent>) => {
-      let newX = e.target.x();
-      let newY = e.target.y();
+      const newX = e.target.x();
+      const newY = e.target.y();
+      const origX = element.x ?? 0;
+      const origY = element.y ?? 0;
 
-      if (snapToGrid) {
-        newX = snapToGridValue(newX, unitGridSize);
-        newY = snapToGridValue(newY, unitGridSize);
+      // Always snap to grid
+      const snappedX = snapToGridValue(newX, unitGridSize);
+      const snappedY = snapToGridValue(newY, unitGridSize);
+      const dx = snappedX - origX;
+      const dy = snappedY - origY;
+
+      // If multiple elements are selected and dragged element is one of them,
+      // move all selected elements
+      if (selectedIds.length > 1 && selectedIds.includes(element.id)) {
+        for (const id of selectedIds) {
+          const el = elements.find((e) => e.id === id);
+          if (!el) continue;
+
+          if (el.type === 'WALL') {
+            const elStartX = typeof el.startX === 'number' ? el.startX : 0;
+            const elStartY = typeof el.startY === 'number' ? el.startY : 0;
+            const elEndX = typeof el.endX === 'number' ? el.endX : 0;
+            const elEndY = typeof el.endY === 'number' ? el.endY : 0;
+            updateElement(el.id, {
+              startX: elStartX + dx,
+              startY: elStartY + dy,
+              endX: elEndX + dx,
+              endY: elEndY + dy,
+            });
+          } else if (el.id === element.id) {
+            // The dragged element - use snapped position
+            updateElement(el.id, { x: snappedX, y: snappedY });
+          } else {
+            // Other selected elements - apply delta
+            const elX = typeof el.x === 'number' ? el.x : 0;
+            const elY = typeof el.y === 'number' ? el.y : 0;
+            updateElement(el.id, { x: elX + dx, y: elY + dy });
+          }
+        }
+      } else {
+        // Single element drag
+        updateElement(element.id, { x: snappedX, y: snappedY });
       }
-
-      updateElement(element.id, { x: newX, y: newY });
     },
-    [snapToGrid, unitGridSize, updateElement]
+    [snapToGrid, unitGridSize, updateElement, selectedIds, elements]
   );
 
   // Handle element transform (resize/rotate)
@@ -647,7 +1056,7 @@ export function FarmCanvas({
     return lines;
   };
 
-  // Handle wall drag (whole wall movement)
+  // Handle wall drag (whole wall movement) - moves all selected elements
   const handleWallDrag = useCallback(
     (element: CanvasElement, e: KonvaEventObject<DragEvent>) => {
       // Get the delta movement from the drag (Line's position relative to Group)
@@ -664,17 +1073,10 @@ export function FarmCanvas({
       // Get current positions - ensure they're numbers
       const currentStartX = typeof element.startX === 'number' ? element.startX : 0;
       const currentStartY = typeof element.startY === 'number' ? element.startY : 0;
-      const currentEndX = typeof element.endX === 'number' ? element.endX : 0;
-      const currentEndY = typeof element.endY === 'number' ? element.endY : 0;
 
-      let newStartX = currentStartX + dx;
-      let newStartY = currentStartY + dy;
-
-      // Apply grid snapping if enabled
-      if (snapToGrid) {
-        newStartX = snapToGridValue(newStartX, unitGridSize);
-        newStartY = snapToGridValue(newStartY, unitGridSize);
-      }
+      // Always snap to grid
+      const newStartX = snapToGridValue(currentStartX + dx, unitGridSize);
+      const newStartY = snapToGridValue(currentStartY + dy, unitGridSize);
 
       // Calculate actual delta after snapping
       const actualDx = newStartX - currentStartX;
@@ -682,18 +1084,39 @@ export function FarmCanvas({
 
       // Only update if there's actual movement after snapping
       if (actualDx !== 0 || actualDy !== 0) {
-        updateElement(element.id, {
-          startX: newStartX,
-          startY: newStartY,
-          endX: currentEndX + actualDx,
-          endY: currentEndY + actualDy,
-        });
+        // Move all selected elements, not just the dragged one
+        const elementsToMove = selectedIds.length > 1 && selectedIds.includes(element.id)
+          ? elements.filter((el) => selectedIds.includes(el.id))
+          : [element];
+
+        for (const el of elementsToMove) {
+          if (el.type === 'WALL') {
+            const elStartX = typeof el.startX === 'number' ? el.startX : 0;
+            const elStartY = typeof el.startY === 'number' ? el.startY : 0;
+            const elEndX = typeof el.endX === 'number' ? el.endX : 0;
+            const elEndY = typeof el.endY === 'number' ? el.endY : 0;
+            updateElement(el.id, {
+              startX: elStartX + actualDx,
+              startY: elStartY + actualDy,
+              endX: elEndX + actualDx,
+              endY: elEndY + actualDy,
+            });
+          } else {
+            // Non-wall elements use x/y
+            const elX = typeof el.x === 'number' ? el.x : 0;
+            const elY = typeof el.y === 'number' ? el.y : 0;
+            updateElement(el.id, {
+              x: elX + actualDx,
+              y: elY + actualDy,
+            });
+          }
+        }
       }
     },
-    [snapToGrid, unitGridSize, updateElement]
+    [snapToGrid, unitGridSize, updateElement, selectedIds, elements]
   );
 
-  // Render wall element
+  // Render wall element with gaps for attached doors
   const renderWall = (element: CanvasElement) => {
     const isSelected = selectedIds.includes(element.id) && selectedType === 'element';
     const thickness = element.thickness ?? 10;
@@ -706,6 +1129,49 @@ export function FarmCanvas({
 
     const relEndX = endX - startX;
     const relEndY = endY - startY;
+    const wallLength = Math.sqrt(relEndX * relEndX + relEndY * relEndY);
+
+    // Find doors attached to this wall
+    const attachedDoors = getDoorsOnWall(element.id);
+
+    // Calculate wall segments with gaps for doors
+    const getWallSegments = (): Array<{ start: number; end: number }> => {
+      if (attachedDoors.length === 0) {
+        return [{ start: 0, end: 1 }];
+      }
+
+      // Sort doors by position
+      const doorGaps = attachedDoors
+        .map((door) => {
+          const pos = (door.metadata?.wallPosition as number) ?? 0.5;
+          const doorWidth = door.width ?? 90;
+          const halfWidth = (doorWidth / 2) / wallLength;
+          return { start: pos - halfWidth, end: pos + halfWidth };
+        })
+        .sort((a, b) => a.start - b.start);
+
+      // Build segments around the gaps
+      const segments: Array<{ start: number; end: number }> = [];
+      let currentStart = 0;
+
+      for (const gap of doorGaps) {
+        if (gap.start > currentStart) {
+          segments.push({ start: currentStart, end: gap.start });
+        }
+        currentStart = gap.end;
+      }
+
+      if (currentStart < 1) {
+        segments.push({ start: currentStart, end: 1 });
+      }
+
+      return segments;
+    };
+
+    const segments = getWallSegments();
+
+    // Check if we're placing a door - if so, let clicks pass through to Stage
+    const isPlacingDoor = activeTool === 'element' && activeElementType === 'DOOR';
 
     return (
       <Group
@@ -714,23 +1180,59 @@ export function FarmCanvas({
         y={startY}
         draggable={false}
         onMouseDown={(e) => {
-          // Stop propagation to prevent Stage from handling this click
+          // When placing doors, let click pass through to Stage
+          if (isPlacingDoor) return;
+          // Otherwise stop propagation to prevent Stage from handling this click
           e.cancelBubble = true;
         }}
-        onClick={(e) => handleElementClick(element, e)}
+        onClick={(e) => {
+          // When placing doors, don't handle wall click
+          if (isPlacingDoor) return;
+          handleElementClick(element, e);
+        }}
       >
-        <Line
-          points={[0, 0, relEndX, relEndY]}
-          stroke={element.color}
-          strokeWidth={thickness}
-          opacity={element.opacity}
-          lineCap="round"
-          lineJoin="round"
-          hitStrokeWidth={Math.max(thickness, 20)}
-          draggable={activeTool === 'select'}
-          onDragStart={handleDragStart}
-          onDragEnd={(e) => handleWallDrag(element, e)}
-        />
+        {/* Render wall segments */}
+        {segments.map((seg, i) => (
+          <Line
+            key={`seg-${i}`}
+            points={[
+              relEndX * seg.start,
+              relEndY * seg.start,
+              relEndX * seg.end,
+              relEndY * seg.end,
+            ]}
+            stroke={element.color}
+            strokeWidth={thickness}
+            opacity={element.opacity}
+            lineCap="round"
+            lineJoin="round"
+            hitStrokeWidth={Math.max(thickness, 20)}
+            draggable={activeTool === 'select'}
+            onDragStart={handleDragStart}
+            onDragMove={(e) => {
+              const node = e.target;
+              const dx = node.x();
+              const dy = node.y();
+              // Calculate new wall position
+              const newStartX = startX + dx;
+              const newStartY = startY + dy;
+              const newEndX = endX + dx;
+              const newEndY = endY + dy;
+              const halfT = thickness / 2;
+              // Calculate bounding box
+              calculateDistanceGuides(element.id, {
+                x: Math.min(newStartX, newEndX) - halfT,
+                y: Math.min(newStartY, newEndY) - halfT,
+                width: Math.abs(newEndX - newStartX) + thickness,
+                height: Math.abs(newEndY - newStartY) + thickness,
+              });
+            }}
+            onDragEnd={(e) => {
+              handleWallDrag(element, e);
+              setDistanceGuides([]);
+            }}
+          />
+        ))}
         {/* Draggable endpoint handles when selected */}
         {isSelected && (
           <>
@@ -824,7 +1326,423 @@ export function FarmCanvas({
     );
   };
 
-  // Render rectangle element (sink, table, grow rack, walkway, circle, custom)
+  // Find the nearest wall for door snapping (tighter for dragging)
+  const findNearestWallForDoor = useCallback(
+    (doorX: number, doorY: number, doorWidth: number): { wall: CanvasElement; position: number; snapX: number; snapY: number; angle: number } | null => {
+      const snapDistance = 30;
+      let nearestWall: { wall: CanvasElement; position: number; snapX: number; snapY: number; angle: number } | null = null;
+      let nearestDist = Infinity;
+
+      for (const el of elements) {
+        if (el.type !== 'WALL') continue;
+
+        const startX = el.startX ?? 0;
+        const startY = el.startY ?? 0;
+        const endX = el.endX ?? 0;
+        const endY = el.endY ?? 0;
+
+        // Calculate wall vector
+        const wallDx = endX - startX;
+        const wallDy = endY - startY;
+        const wallLength = Math.sqrt(wallDx * wallDx + wallDy * wallDy);
+        if (wallLength < doorWidth) continue; // Wall too short for door
+
+        // Find closest point on wall line to door center
+        const t = Math.max(0, Math.min(1, ((doorX - startX) * wallDx + (doorY - startY) * wallDy) / (wallLength * wallLength)));
+        const closestX = startX + t * wallDx;
+        const closestY = startY + t * wallDy;
+        const dist = Math.sqrt((doorX - closestX) ** 2 + (doorY - closestY) ** 2);
+
+        if (dist < snapDistance && dist < nearestDist) {
+          // Check if door fits at this position (not too close to ends)
+          const halfDoorInWallUnits = (doorWidth / 2) / wallLength;
+          if (t >= halfDoorInWallUnits && t <= 1 - halfDoorInWallUnits) {
+            nearestDist = dist;
+            const angle = Math.atan2(wallDy, wallDx) * (180 / Math.PI);
+            nearestWall = {
+              wall: el,
+              position: t,
+              snapX: closestX,
+              snapY: closestY,
+              angle: angle,
+            };
+          }
+        }
+      }
+
+      return nearestWall;
+    },
+    [elements]
+  );
+
+  // Get doors attached to a specific wall
+  const getDoorsOnWall = useCallback(
+    (wallId: string) => {
+      return elements.filter(
+        (el) => el.type === 'DOOR' && el.metadata?.attachedWallId === wallId
+      );
+    },
+    [elements]
+  );
+
+  // Render door element with swing arc
+  const renderDoor = (element: CanvasElement) => {
+    const isSelected = selectedIds.includes(element.id) && selectedType === 'element';
+    const elementWidth = element.width ?? 90;
+    const elementHeight = element.height ?? 10;
+    const swingDirection = (element.metadata?.swingDirection as 'left' | 'right') ?? 'left';
+    const swingAngle = (element.metadata?.swingAngle as 'in' | 'out') ?? 'in';
+    const isAttached = !!element.metadata?.attachedWallId;
+
+    // Half dimensions for center-based positioning
+    const halfWidth = elementWidth / 2;
+    const halfHeight = elementHeight / 2;
+
+    // Arc settings - drawn relative to door center
+    const arcRadius = elementWidth * 0.9;
+    // Hinge position (local coords relative to center)
+    const hingeX = swingDirection === 'left' ? -halfWidth : halfWidth;
+    // Arc rotation based on swing direction
+    let arcRotation = 0;
+    if (swingDirection === 'left' && swingAngle === 'in') {
+      arcRotation = -90;
+    } else if (swingDirection === 'left' && swingAngle === 'out') {
+      arcRotation = 0;
+    } else if (swingDirection === 'right' && swingAngle === 'in') {
+      arcRotation = 180;
+    } else {
+      arcRotation = 90;
+    }
+
+    return (
+      <Group
+        key={element.id}
+        x={element.x ?? 0}
+        y={element.y ?? 0}
+        rotation={element.rotation ?? 0}
+        draggable={activeTool === 'select'}
+        onMouseDown={(e) => {
+          e.cancelBubble = true;
+        }}
+        onClick={(e) => handleElementClick(element, e)}
+        onDragStart={handleDragStart}
+        onDragEnd={(e) => {
+          // Get the group's new center position after drag
+          const group = e.target;
+          const newX = group.x();
+          const newY = group.y();
+
+          // Try to snap to a wall (position is already center)
+          const wallSnap = findNearestWallForDoor(newX, newY, elementWidth);
+
+          if (wallSnap) {
+            // Snap to wall - store center position
+            updateElement(element.id, {
+              x: wallSnap.snapX,
+              y: wallSnap.snapY,
+              rotation: wallSnap.angle,
+              metadata: {
+                ...element.metadata,
+                attachedWallId: wallSnap.wall.id,
+                wallPosition: wallSnap.position,
+              },
+            });
+          } else {
+            // Not near a wall - snap back to original position (doors must stay on walls)
+            group.x(element.x ?? 0);
+            group.y(element.y ?? 0);
+          }
+        }}
+      >
+        {/* Door panel - positioned relative to center */}
+        <Rect
+          x={-halfWidth}
+          y={-halfHeight}
+          width={elementWidth}
+          height={elementHeight}
+          fill={element.color}
+          opacity={element.opacity}
+          stroke={isSelected ? '#2563eb' : '#333'}
+          strokeWidth={isSelected ? 3 : 1}
+          cornerRadius={2}
+        />
+        {/* Swing arc */}
+        <Arc
+          x={hingeX}
+          y={0}
+          innerRadius={arcRadius - 2}
+          outerRadius={arcRadius}
+          angle={90}
+          rotation={arcRotation}
+          fill="transparent"
+          stroke={element.color}
+          strokeWidth={2}
+          opacity={0.4}
+          dash={[5, 3]}
+        />
+        {/* Hinge indicator */}
+        <Circle
+          x={swingDirection === 'left' ? -halfWidth + 4 : halfWidth - 4}
+          y={0}
+          radius={3}
+          fill="#333"
+          stroke="#fff"
+          strokeWidth={1}
+        />
+        {/* Attached indicator */}
+        {isAttached && (
+          <Circle
+            x={0}
+            y={-halfHeight - 6}
+            radius={4}
+            fill="#22c55e"
+            stroke="#fff"
+            strokeWidth={1}
+          />
+        )}
+      </Group>
+    );
+  };
+
+  // Render walkway with striped pattern (line-based, like walls)
+  const renderWalkway = (element: CanvasElement) => {
+    const isSelected = selectedIds.includes(element.id) && selectedType === 'element';
+    const thickness = element.thickness ?? 30;
+
+    // Get coordinates
+    const startX = typeof element.startX === 'number' ? element.startX : 0;
+    const startY = typeof element.startY === 'number' ? element.startY : 0;
+    const endX = typeof element.endX === 'number' ? element.endX : 0;
+    const endY = typeof element.endY === 'number' ? element.endY : 0;
+
+    const relEndX = endX - startX;
+    const relEndY = endY - startY;
+    const length = Math.sqrt(relEndX * relEndX + relEndY * relEndY);
+    const angle = Math.atan2(relEndY, relEndX) * (180 / Math.PI);
+
+    // Stripe settings
+    const stripeSpacing = 20;
+    const stripeCount = Math.floor(length / stripeSpacing);
+
+    return (
+      <Group
+        key={element.id}
+        x={startX}
+        y={startY}
+        rotation={angle}
+        draggable={false}
+        onMouseDown={(e) => {
+          e.cancelBubble = true;
+        }}
+        onClick={(e) => handleElementClick(element, e)}
+      >
+        {/* Base walkway fill */}
+        <Rect
+          x={0}
+          y={-thickness / 2}
+          width={length}
+          height={thickness}
+          fill={element.color}
+          opacity={element.opacity}
+          cornerRadius={4}
+          hitStrokeWidth={Math.max(thickness, 20)}
+          draggable={activeTool === 'select'}
+          onDragStart={handleDragStart}
+          onDragMove={(e) => {
+            const node = e.target;
+            const dx = node.x();
+            const dy = node.y();
+            // Calculate new walkway position (rotated)
+            const rad = (angle * Math.PI) / 180;
+            const cos = Math.cos(rad);
+            const sin = Math.sin(rad);
+            const worldDx = cos * dx - sin * dy;
+            const worldDy = sin * dx + cos * dy;
+            const newStartX = startX + worldDx;
+            const newStartY = startY + worldDy;
+            const newEndX = endX + worldDx;
+            const newEndY = endY + worldDy;
+            const halfT = thickness / 2;
+            calculateDistanceGuides(element.id, {
+              x: Math.min(newStartX, newEndX) - halfT,
+              y: Math.min(newStartY, newEndY) - halfT,
+              width: Math.abs(newEndX - newStartX) + thickness,
+              height: Math.abs(newEndY - newStartY) + thickness,
+            });
+          }}
+          onDragEnd={(e) => {
+            // Get the delta movement
+            const node = e.target;
+            const dx = node.x();
+            const dy = node.y() + thickness / 2; // Account for initial y offset
+
+            // Reset node position
+            node.x(0);
+            node.y(-thickness / 2);
+
+            if (dx === 0 && dy === 0) {
+              setDistanceGuides([]);
+              return;
+            }
+
+            // Convert local drag delta to world coordinates (account for rotation)
+            const rad = (angle * Math.PI) / 180;
+            const cos = Math.cos(rad);
+            const sin = Math.sin(rad);
+            const worldDx = cos * dx - sin * dy;
+            const worldDy = sin * dx + cos * dy;
+
+            // Always snap to grid
+            const newStartX = snapToGridValue(startX + worldDx, unitGridSize);
+            const newStartY = snapToGridValue(startY + worldDy, unitGridSize);
+            const actualDx = newStartX - startX;
+            const actualDy = newStartY - startY;
+
+            if (actualDx !== 0 || actualDy !== 0) {
+              updateElement(element.id, {
+                startX: startX + actualDx,
+                startY: startY + actualDy,
+                endX: endX + actualDx,
+                endY: endY + actualDy,
+              });
+            }
+            setDistanceGuides([]);
+          }}
+        />
+        {/* Diagonal stripes */}
+        {Array.from({ length: stripeCount }).map((_, i) => (
+          <Line
+            key={`stripe-${i}`}
+            points={[
+              i * stripeSpacing + stripeSpacing / 2,
+              -thickness / 2,
+              i * stripeSpacing,
+              thickness / 2,
+            ]}
+            stroke="#ffffff"
+            strokeWidth={3}
+            opacity={0.4}
+            listening={false}
+          />
+        ))}
+        {/* Border lines */}
+        <Line
+          points={[0, -thickness / 2, length, -thickness / 2]}
+          stroke={isSelected ? '#2563eb' : 'rgba(0,0,0,0.3)'}
+          strokeWidth={isSelected ? 2 : 1}
+          listening={false}
+        />
+        <Line
+          points={[0, thickness / 2, length, thickness / 2]}
+          stroke={isSelected ? '#2563eb' : 'rgba(0,0,0,0.3)'}
+          strokeWidth={isSelected ? 2 : 1}
+          listening={false}
+        />
+        {/* Endpoint handles when selected */}
+        {isSelected && (
+          <>
+            {/* Start point handle */}
+            <Circle
+              x={0}
+              y={0}
+              radius={8}
+              fill="#2563eb"
+              stroke="#fff"
+              strokeWidth={2}
+              draggable
+              onDragStart={handleDragStart}
+              onDragMove={(e) => {
+                const node = e.target;
+                const worldPos = {
+                  x: startX + Math.cos((angle * Math.PI) / 180) * node.x() - Math.sin((angle * Math.PI) / 180) * node.y(),
+                  y: startY + Math.sin((angle * Math.PI) / 180) * node.x() + Math.cos((angle * Math.PI) / 180) * node.y(),
+                };
+                const snapped = snapPosition(worldPos, element.id);
+                // Convert back to local coords
+                const localX = (snapped.x - startX) * Math.cos((-angle * Math.PI) / 180) - (snapped.y - startY) * Math.sin((-angle * Math.PI) / 180);
+                const localY = (snapped.x - startX) * Math.sin((-angle * Math.PI) / 180) + (snapped.y - startY) * Math.cos((-angle * Math.PI) / 180);
+                node.x(localX);
+                node.y(localY);
+              }}
+              onDragEnd={(e) => {
+                const node = e.target;
+                const worldPos = {
+                  x: startX + Math.cos((angle * Math.PI) / 180) * node.x() - Math.sin((angle * Math.PI) / 180) * node.y(),
+                  y: startY + Math.sin((angle * Math.PI) / 180) * node.x() + Math.cos((angle * Math.PI) / 180) * node.y(),
+                };
+                const snapped = snapPosition(worldPos, element.id);
+                updateElement(element.id, {
+                  startX: snapped.x,
+                  startY: snapped.y,
+                });
+                node.x(0);
+                node.y(0);
+              }}
+              onMouseEnter={(e) => {
+                const container = e.target.getStage()?.container();
+                if (container) container.style.cursor = 'move';
+              }}
+              onMouseLeave={(e) => {
+                const container = e.target.getStage()?.container();
+                if (container) container.style.cursor = 'default';
+              }}
+            />
+            {/* End point handle */}
+            <Circle
+              x={length}
+              y={0}
+              radius={8}
+              fill="#2563eb"
+              stroke="#fff"
+              strokeWidth={2}
+              draggable
+              onDragStart={handleDragStart}
+              onDragMove={(e) => {
+                const node = e.target;
+                const worldPos = {
+                  x: startX + Math.cos((angle * Math.PI) / 180) * node.x() - Math.sin((angle * Math.PI) / 180) * node.y(),
+                  y: startY + Math.sin((angle * Math.PI) / 180) * node.x() + Math.cos((angle * Math.PI) / 180) * node.y(),
+                };
+                const snapped = snapPosition(worldPos, element.id);
+                const localX = (snapped.x - startX) * Math.cos((-angle * Math.PI) / 180) - (snapped.y - startY) * Math.sin((-angle * Math.PI) / 180);
+                const localY = (snapped.x - startX) * Math.sin((-angle * Math.PI) / 180) + (snapped.y - startY) * Math.cos((-angle * Math.PI) / 180);
+                node.x(localX);
+                node.y(localY);
+              }}
+              onDragEnd={(e) => {
+                const node = e.target;
+                const worldPos = {
+                  x: startX + Math.cos((angle * Math.PI) / 180) * node.x() - Math.sin((angle * Math.PI) / 180) * node.y(),
+                  y: startY + Math.sin((angle * Math.PI) / 180) * node.x() + Math.cos((angle * Math.PI) / 180) * node.y(),
+                };
+                const snapped = snapPosition(worldPos, element.id);
+                updateElement(element.id, {
+                  endX: snapped.x,
+                  endY: snapped.y,
+                });
+                // Recalculate new length for handle position
+                const newLength = Math.sqrt(
+                  Math.pow(snapped.x - startX, 2) + Math.pow(snapped.y - startY, 2)
+                );
+                node.x(newLength);
+                node.y(0);
+              }}
+              onMouseEnter={(e) => {
+                const container = e.target.getStage()?.container();
+                if (container) container.style.cursor = 'move';
+              }}
+              onMouseLeave={(e) => {
+                const container = e.target.getStage()?.container();
+                if (container) container.style.cursor = 'default';
+              }}
+            />
+          </>
+        )}
+      </Group>
+    );
+  };
+
+  // Render rectangle element (sink, table, grow rack, circle, custom)
   const renderRectElement = (element: CanvasElement) => {
     const isSelected = selectedIds.includes(element.id) && selectedType === 'element';
     const isGrowRack = element.type === 'GROW_RACK';
@@ -857,7 +1775,19 @@ export function FarmCanvas({
         }}
         onClick={(e) => handleElementClick(element, e)}
         onDragStart={handleDragStart}
-        onDragEnd={(e) => handleElementDragEnd(element, e)}
+        onDragMove={(e) => {
+          const node = e.target;
+          calculateDistanceGuides(element.id, {
+            x: node.x(),
+            y: node.y(),
+            width: elementWidth,
+            height: elementHeight,
+          });
+        }}
+        onDragEnd={(e) => {
+          handleElementDragEnd(element, e);
+          setDistanceGuides([]);
+        }}
         onTransformEnd={(e) => handleElementTransformEnd(element, e)}
       >
         {/* Shape - Circle or Rectangle */}
@@ -967,28 +1897,73 @@ export function FarmCanvas({
       case 'wall':
       case 'element':
         return 'crosshair';
+      case 'measure':
+        return 'crosshair';
       default:
         return 'default';
     }
   };
 
+  // Get measurement data between two click points
+  const getMeasurementData = useCallback(() => {
+    if (measureState.points.length !== 2) return null;
+
+    const point1 = measureState.points[0];
+    const point2 = measureState.points[1];
+
+    const dx = point2.clickPoint.x - point1.clickPoint.x;
+    const dy = point2.clickPoint.y - point1.clickPoint.y;
+    const distance = Math.sqrt(dx * dx + dy * dy);
+
+    return {
+      x1: point1.clickPoint.x,
+      y1: point1.clickPoint.y,
+      x2: point2.clickPoint.x,
+      y2: point2.clickPoint.y,
+      distance,
+    };
+  }, [measureState.points]);
+
   return (
-    <Stage
-      ref={stageRef}
-      width={width}
-      height={height}
-      scaleX={zoom}
-      scaleY={zoom}
-      x={panOffset.x}
-      y={panOffset.y}
-      onWheel={handleWheel}
-      onMouseDown={handleMouseDown}
-      onMouseMove={handleMouseMove}
-      onMouseUp={handleMouseUp}
-      onDblClick={handleDoubleClick}
-      onContextMenu={(e) => e.evt.preventDefault()}
-      style={{ backgroundColor: '#f5f5f5', cursor: getCursor() }}
-    >
+    <div className="relative" style={{ width, height }}>
+      {/* Measure mode instruction overlay */}
+      {activeTool === 'measure' && (
+        <div className="absolute top-4 left-1/2 -translate-x-1/2 z-50 px-4 py-2 bg-green-100 text-green-800 border border-green-200 rounded-lg shadow-lg text-sm font-medium">
+          {measureState.points.length === 0
+            ? 'Click on any element to set the first measurement point'
+            : measureState.points.length === 1
+            ? 'Click on another point to measure distance'
+            : `Distance: ${formatDistance(getMeasurementData()?.distance ?? 0, unitSystem)}`}
+        </div>
+      )}
+      {/* Notification overlay */}
+      {notification && (
+        <div
+          className={`absolute top-4 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-lg shadow-lg text-sm font-medium transition-opacity ${
+            notification.type === 'error'
+              ? 'bg-red-100 text-red-800 border border-red-200'
+              : 'bg-blue-100 text-blue-800 border border-blue-200'
+          }`}
+        >
+          {notification.message}
+        </div>
+      )}
+      <Stage
+        ref={stageRef}
+        width={width}
+        height={height}
+        scaleX={zoom}
+        scaleY={zoom}
+        x={panOffset.x}
+        y={panOffset.y}
+        onWheel={handleWheel}
+        onMouseDown={handleMouseDown}
+        onMouseMove={handleMouseMove}
+        onMouseUp={handleMouseUp}
+        onDblClick={handleDoubleClick}
+        onContextMenu={(e) => e.evt.preventDefault()}
+        style={{ backgroundColor: '#f5f5f5', cursor: getCursor() }}
+      >
       {/* Grid layer - non-listening so clicks pass through to stage */}
       <Layer listening={false}>
         {renderGrid()}
@@ -996,13 +1971,19 @@ export function FarmCanvas({
 
       {/* Elements layer */}
       <Layer>
-        {elements.map((element) =>
-          element.type === 'WALL' ? renderWall(element) : renderRectElement(element)
-        )}
-        {/* Transformer for resize/rotate - only for non-wall elements */}
+        {elements.map((element) => {
+          if (element.type === 'WALL') return renderWall(element);
+          if (element.type === 'DOOR') return renderDoor(element);
+          // Line-based walkways use renderWalkway, old rectangle walkways use renderRectElement
+          if (element.type === 'WALKWAY' && element.startX !== undefined) return renderWalkway(element);
+          return renderRectElement(element);
+        })}
+        {/* Transformer for resize/rotate - only for non-wall, non-door, and non-line-walkway elements */}
         {selectedIds.length > 0 && selectedType === 'element' && selectedIds.some(id => {
           const el = elements.find(e => e.id === id);
-          return el && el.type !== 'WALL';
+          // Exclude walls, doors, and line-based walkways (they have custom handles)
+          const isLineWalkway = el?.type === 'WALKWAY' && el.startX !== undefined;
+          return el && el.type !== 'WALL' && el.type !== 'DOOR' && !isLineWalkway;
         }) && (
           <Transformer
             ref={transformerRef}
@@ -1058,6 +2039,55 @@ export function FarmCanvas({
             strokeWidth={2}
           />
         )}
+        {/* Walkway preview */}
+        {walkwayPreview && (() => {
+          const dx = walkwayPreview.endX - walkwayPreview.startX;
+          const dy = walkwayPreview.endY - walkwayPreview.startY;
+          const length = Math.sqrt(dx * dx + dy * dy);
+          const angle = Math.atan2(dy, dx) * (180 / Math.PI);
+          const thickness = DEFAULT_ELEMENT_DIMENSIONS.WALKWAY.width;
+          const stripeSpacing = 20;
+          const stripeCount = Math.floor(length / stripeSpacing);
+
+          return (
+            <Group x={walkwayPreview.startX} y={walkwayPreview.startY} rotation={angle}>
+              <Rect
+                x={0}
+                y={-thickness / 2}
+                width={length}
+                height={thickness}
+                fill={DEFAULT_ELEMENT_COLORS.WALKWAY}
+                opacity={0.5}
+                cornerRadius={4}
+              />
+              {Array.from({ length: stripeCount }).map((_, i) => (
+                <Line
+                  key={`preview-stripe-${i}`}
+                  points={[
+                    i * stripeSpacing + stripeSpacing / 2,
+                    -thickness / 2,
+                    i * stripeSpacing,
+                    thickness / 2,
+                  ]}
+                  stroke="#ffffff"
+                  strokeWidth={3}
+                  opacity={0.3}
+                />
+              ))}
+            </Group>
+          );
+        })()}
+        {/* Start point indicator when drawing walkway */}
+        {walkwayDrawing.startPoint && walkwayDrawing.isDrawing && (
+          <Circle
+            x={walkwayDrawing.startPoint.x}
+            y={walkwayDrawing.startPoint.y}
+            radius={8}
+            fill={DEFAULT_ELEMENT_COLORS.WALKWAY}
+            stroke="#fff"
+            strokeWidth={2}
+          />
+        )}
         {/* Snap indicator - shows when snapping to wall endpoint */}
         {snapIndicator && (
           <>
@@ -1090,7 +2120,103 @@ export function FarmCanvas({
             dash={[5, 5]}
           />
         )}
+        {/* Distance guide lines */}
+        {distanceGuides.map((guide, i) => (
+          <Group key={`guide-${i}`}>
+            <Line
+              points={[guide.x1, guide.y1, guide.x2, guide.y2]}
+              stroke="#ef4444"
+              strokeWidth={1}
+              dash={[4, 4]}
+            />
+            {/* Distance label */}
+            <Label
+              x={(guide.x1 + guide.x2) / 2}
+              y={(guide.y1 + guide.y2) / 2}
+              offsetX={guide.direction === 'horizontal' ? 0 : -8}
+              offsetY={guide.direction === 'horizontal' ? 10 : 0}
+            >
+              <Tag
+                fill="rgba(0,0,0,0.75)"
+                cornerRadius={3}
+                pointerDirection={guide.direction === 'horizontal' ? 'down' : 'left'}
+                pointerWidth={6}
+                pointerHeight={4}
+              />
+              <Text
+                text={formatDistance(guide.distance, unitSystem)}
+                fill="#fff"
+                fontSize={11}
+                padding={4}
+              />
+            </Label>
+          </Group>
+        ))}
+        {/* Measure tool visualization */}
+        {activeTool === 'measure' && measureState.points.length > 0 && (
+          <>
+            {/* Highlight first click point */}
+            {measureState.points[0] && (
+              <Circle
+                x={measureState.points[0].clickPoint.x}
+                y={measureState.points[0].clickPoint.y}
+                radius={8}
+                fill="#22c55e"
+                stroke="#fff"
+                strokeWidth={2}
+              />
+            )}
+            {/* Highlight second click point */}
+            {measureState.points[1] && (
+              <Circle
+                x={measureState.points[1].clickPoint.x}
+                y={measureState.points[1].clickPoint.y}
+                radius={8}
+                fill="#22c55e"
+                stroke="#fff"
+                strokeWidth={2}
+              />
+            )}
+            {/* Measurement line and distance label */}
+            {(() => {
+              const measurement = getMeasurementData();
+              if (!measurement) return null;
+              const { x1, y1, x2, y2, distance } = measurement;
+              const midX = (x1 + x2) / 2;
+              const midY = (y1 + y2) / 2;
+              return (
+                <Group>
+                  {/* Measurement line */}
+                  <Line
+                    points={[x1, y1, x2, y2]}
+                    stroke="#22c55e"
+                    strokeWidth={2}
+                    dash={[8, 4]}
+                  />
+                  {/* Distance label */}
+                  <Label x={midX} y={midY} offsetY={15}>
+                    <Tag
+                      fill="#22c55e"
+                      cornerRadius={4}
+                      pointerDirection="down"
+                      pointerWidth={8}
+                      pointerHeight={6}
+                    />
+                    <Text
+                      text={formatDistance(distance, unitSystem)}
+                      fill="#fff"
+                      fontSize={14}
+                      fontStyle="bold"
+                      padding={6}
+                    />
+                  </Label>
+                </Group>
+              );
+            })()}
+          </>
+        )}
       </Layer>
     </Stage>
+    </div>
   );
 }

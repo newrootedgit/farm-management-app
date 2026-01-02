@@ -48,7 +48,7 @@ export interface CanvasElement {
   };
 }
 
-export type CanvasTool = 'select' | 'pan' | 'zone' | 'wall' | 'element';
+export type CanvasTool = 'select' | 'pan' | 'zone' | 'wall' | 'element' | 'measure';
 
 export type WallDrawMode = 'click_points' | 'direction_length';
 
@@ -56,6 +56,20 @@ interface WallDrawingState {
   mode: WallDrawMode;
   startPoint: { x: number; y: number } | null;
   isDrawing: boolean;
+}
+
+interface WalkwayDrawingState {
+  startPoint: { x: number; y: number } | null;
+  isDrawing: boolean;
+}
+
+interface MeasurePoint {
+  elementId: string;
+  clickPoint: { x: number; y: number };
+}
+
+interface MeasureState {
+  points: [MeasurePoint, MeasurePoint] | [MeasurePoint] | [];
 }
 
 interface HistoryState {
@@ -126,6 +140,17 @@ interface CanvasState {
   setWallIsDrawing: (isDrawing: boolean) => void;
   resetWallDrawing: () => void;
 
+  // Walkway drawing state
+  walkwayDrawing: WalkwayDrawingState;
+  setWalkwayStartPoint: (point: { x: number; y: number } | null) => void;
+  setWalkwayIsDrawing: (isDrawing: boolean) => void;
+  resetWalkwayDrawing: () => void;
+
+  // Measure tool state
+  measureState: MeasureState;
+  addMeasurePoint: (elementId: string, clickPoint: { x: number; y: number }) => void;
+  clearMeasure: () => void;
+
   // Undo/Redo
   history: HistoryState[];
   historyIndex: number;
@@ -152,6 +177,10 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     // Reset wall drawing when switching away from wall tool
     if (tool !== 'wall') {
       get().resetWallDrawing();
+    }
+    // Reset walkway drawing when switching tools
+    if (tool !== 'element') {
+      get().resetWalkwayDrawing();
     }
   },
 
@@ -200,21 +229,17 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     const selectedIds: string[] = [];
 
     for (const el of elements) {
-      if (el.type === 'WALL') {
-        // For walls, check if either endpoint is within bounds
+      if (el.type === 'WALL' || (el.type === 'WALKWAY' && el.startX !== undefined)) {
+        // For walls and line-based walkways, check if any portion intersects the bounds
         const startX = el.startX ?? 0;
         const startY = el.startY ?? 0;
         const endX = el.endX ?? 0;
         const endY = el.endY ?? 0;
 
-        const startInBounds =
-          startX >= bounds.x && startX <= bounds.x + bounds.width &&
-          startY >= bounds.y && startY <= bounds.y + bounds.height;
-        const endInBounds =
-          endX >= bounds.x && endX <= bounds.x + bounds.width &&
-          endY >= bounds.y && endY <= bounds.y + bounds.height;
-
-        if (startInBounds || endInBounds) {
+        if (lineIntersectsRect(
+          startX, startY, endX, endY,
+          bounds.x, bounds.y, bounds.width, bounds.height
+        )) {
           selectedIds.push(el.id);
         }
       } else {
@@ -356,6 +381,46 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       },
     }),
 
+  // Walkway drawing
+  walkwayDrawing: {
+    startPoint: null,
+    isDrawing: false,
+  },
+  setWalkwayStartPoint: (point) =>
+    set((state) => ({
+      walkwayDrawing: { ...state.walkwayDrawing, startPoint: point },
+    })),
+  setWalkwayIsDrawing: (isDrawing) =>
+    set((state) => ({
+      walkwayDrawing: { ...state.walkwayDrawing, isDrawing },
+    })),
+  resetWalkwayDrawing: () =>
+    set({
+      walkwayDrawing: {
+        startPoint: null,
+        isDrawing: false,
+      },
+    }),
+
+  // Measure tool state
+  measureState: {
+    points: [],
+  },
+  addMeasurePoint: (elementId, clickPoint) => {
+    const { measureState } = get();
+    const newPoint: MeasurePoint = { elementId, clickPoint };
+    if (measureState.points.length === 0) {
+      set({ measureState: { points: [newPoint] } });
+    } else if (measureState.points.length === 1) {
+      // Allow measuring on the same element (different points)
+      set({ measureState: { points: [measureState.points[0], newPoint] } });
+    } else {
+      // Reset and start with this point
+      set({ measureState: { points: [newPoint] } });
+    }
+  },
+  clearMeasure: () => set({ measureState: { points: [] } }),
+
   // Undo/Redo
   history: [],
   historyIndex: -1,
@@ -450,4 +515,64 @@ export function generateId(prefix: string = 'el'): string {
 // Get the first selected ID (for backward compatibility)
 export function getSelectedId(state: { selectedIds: string[] }): string | null {
   return state.selectedIds.length > 0 ? state.selectedIds[0] : null;
+}
+
+// ============================================================================
+// LINE-RECTANGLE INTERSECTION HELPERS
+// ============================================================================
+
+// Check if a line segment intersects a rectangle
+function lineIntersectsRect(
+  x1: number, y1: number, x2: number, y2: number,  // line segment
+  rx: number, ry: number, rw: number, rh: number   // rectangle
+): boolean {
+  // Check if either endpoint is inside rectangle
+  const p1Inside = x1 >= rx && x1 <= rx + rw && y1 >= ry && y1 <= ry + rh;
+  const p2Inside = x2 >= rx && x2 <= rx + rw && y2 >= ry && y2 <= ry + rh;
+  if (p1Inside || p2Inside) return true;
+
+  // Check if line crosses any of the 4 rectangle edges
+  const edges: [number, number, number, number][] = [
+    [rx, ry, rx + rw, ry],           // top
+    [rx, ry + rh, rx + rw, ry + rh], // bottom
+    [rx, ry, rx, ry + rh],           // left
+    [rx + rw, ry, rx + rw, ry + rh]  // right
+  ];
+
+  return edges.some(([ex1, ey1, ex2, ey2]) =>
+    linesIntersect(x1, y1, x2, y2, ex1, ey1, ex2, ey2)
+  );
+}
+
+// Line-line intersection test using cross products
+function linesIntersect(
+  x1: number, y1: number, x2: number, y2: number,
+  x3: number, y3: number, x4: number, y4: number
+): boolean {
+  const d1 = direction(x3, y3, x4, y4, x1, y1);
+  const d2 = direction(x3, y3, x4, y4, x2, y2);
+  const d3 = direction(x1, y1, x2, y2, x3, y3);
+  const d4 = direction(x1, y1, x2, y2, x4, y4);
+
+  if (((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) &&
+      ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0))) {
+    return true;
+  }
+
+  // Check collinear cases
+  if (d1 === 0 && onSegment(x3, y3, x4, y4, x1, y1)) return true;
+  if (d2 === 0 && onSegment(x3, y3, x4, y4, x2, y2)) return true;
+  if (d3 === 0 && onSegment(x1, y1, x2, y2, x3, y3)) return true;
+  if (d4 === 0 && onSegment(x1, y1, x2, y2, x4, y4)) return true;
+
+  return false;
+}
+
+function direction(x1: number, y1: number, x2: number, y2: number, x3: number, y3: number): number {
+  return (x3 - x1) * (y2 - y1) - (y3 - y1) * (x2 - x1);
+}
+
+function onSegment(x1: number, y1: number, x2: number, y2: number, x: number, y: number): boolean {
+  return Math.min(x1, x2) <= x && x <= Math.max(x1, x2) &&
+         Math.min(y1, y2) <= y && y <= Math.max(y1, y2);
 }
