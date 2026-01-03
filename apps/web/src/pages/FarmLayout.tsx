@@ -6,6 +6,7 @@ import {
   useUpdateFarmLayout,
   useLayoutElements,
   useCreateLayoutElement,
+  useDeleteLayoutElement,
   useBulkUpdateLayoutElements,
   useElementPresets,
   useCreateElementPreset,
@@ -33,6 +34,7 @@ export default function FarmLayout() {
   // Mutations
   const updateLayout = useUpdateFarmLayout(currentFarmId ?? '');
   const createElement = useCreateLayoutElement(currentFarmId ?? '');
+  const deleteElement = useDeleteLayoutElement(currentFarmId ?? '');
   const bulkUpdateElements = useBulkUpdateLayoutElements(currentFarmId ?? '');
   const updatePreferences = useUpdateUserPreferences(currentFarmId ?? '');
   const createPreset = useCreateElementPreset(currentFarmId ?? '');
@@ -59,6 +61,7 @@ export default function FarmLayout() {
     redo,
     setActiveTool,
     pushHistory,
+    resetHistory,
   } = useCanvasStore();
 
   // Local state
@@ -395,63 +398,71 @@ export default function FarmLayout() {
         gridSize: 20,
       });
 
-      // Process all elements
-      if (elements.length > 0) {
-        // Separate new elements from existing ones
-        const existingIds = new Set(apiElements?.map((el) => el.id) ?? []);
-        const newElements = elements.filter((el) => !existingIds.has(el.id));
-        const existingElements = elements.filter((el) => existingIds.has(el.id));
+      // Separate elements into: new, existing, and deleted
+      const canvasIds = new Set(elements.map((el) => el.id));
+      const apiIds = new Set(apiElements?.map((el) => el.id) ?? []);
 
-        // Create new elements via API
-        for (const el of newElements) {
-          await createElement.mutateAsync({
+      const newElements = elements.filter((el) => !apiIds.has(el.id));
+      const existingElements = elements.filter((el) => apiIds.has(el.id));
+      const deletedIds = (apiElements ?? []).filter((el) => !canvasIds.has(el.id)).map((el) => el.id);
+
+      // Delete elements that were removed from the canvas
+      for (const id of deletedIds) {
+        await deleteElement.mutateAsync(id);
+      }
+
+      // Create new elements via API
+      for (const el of newElements) {
+        await createElement.mutateAsync({
+          name: el.name,
+          type: el.type,
+          startX: el.startX,
+          startY: el.startY,
+          endX: el.endX,
+          endY: el.endY,
+          thickness: el.thickness ?? 10,
+          positionX: el.x,
+          positionY: el.y,
+          width: el.width,
+          height: el.height,
+          rotation: el.rotation ?? 0,
+          color: el.color,
+          opacity: el.opacity,
+          metadata: el.metadata,
+          presetId: el.presetId,
+        });
+      }
+
+      // Bulk update existing elements
+      if (existingElements.length > 0) {
+        const elementUpdates = existingElements.map((el) => ({
+          id: el.id,
+          updates: {
             name: el.name,
-            type: el.type,
             startX: el.startX,
             startY: el.startY,
             endX: el.endX,
             endY: el.endY,
-            thickness: el.thickness ?? 10,
+            thickness: el.thickness,
             positionX: el.x,
             positionY: el.y,
             width: el.width,
             height: el.height,
-            rotation: el.rotation ?? 0,
+            rotation: el.rotation,
             color: el.color,
             opacity: el.opacity,
             metadata: el.metadata,
             presetId: el.presetId,
-          });
-        }
+          },
+        }));
 
-        // Bulk update existing elements
-        if (existingElements.length > 0) {
-          const elementUpdates = existingElements.map((el) => ({
-            id: el.id,
-            updates: {
-              name: el.name,
-              startX: el.startX,
-              startY: el.startY,
-              endX: el.endX,
-              endY: el.endY,
-              thickness: el.thickness,
-              positionX: el.x,
-              positionY: el.y,
-              width: el.width,
-              height: el.height,
-              rotation: el.rotation,
-              color: el.color,
-              opacity: el.opacity,
-              metadata: el.metadata,
-              presetId: el.presetId,
-            },
-          }));
-
-          await bulkUpdateElements.mutateAsync(elementUpdates);
-        }
+        await bulkUpdateElements.mutateAsync(elementUpdates);
       }
 
       setDirty(false);
+
+      // Reset history so user can't undo past this saved state
+      resetHistory();
 
       // Show success notification
       setSaveNotification('Layout saved successfully!');
@@ -466,7 +477,7 @@ export default function FarmLayout() {
         isSavingRef.current = false;
       }, 500);
     }
-  }, [currentFarmId, layout, elements, apiElements, updateLayout, createElement, bulkUpdateElements, setDirty]);
+  }, [currentFarmId, layout, elements, apiElements, updateLayout, createElement, deleteElement, bulkUpdateElements, setDirty, resetHistory]);
 
   // Handle element selection from canvas
   const handleElementSelect = useCallback((element: CanvasElement | null) => {
@@ -578,7 +589,7 @@ export default function FarmLayout() {
       <div className="flex-1 flex flex-col border rounded-lg overflow-hidden bg-card">
         <CanvasToolbar
           onSave={handleSave}
-          isSaving={updateLayout.isPending || bulkUpdateElements.isPending}
+          isSaving={updateLayout.isPending || deleteElement.isPending || bulkUpdateElements.isPending}
           presets={presets}
           onAddGrowRack={() => setGrowRackModalOpen(true)}
           onManagePresets={() => setPresetManagerOpen(true)}

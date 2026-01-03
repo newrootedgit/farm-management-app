@@ -96,6 +96,9 @@ export function FarmCanvas({
   } | null>(null);
   const [isMarqueeSelecting, setIsMarqueeSelecting] = useState(false);
 
+  // Track initial positions for multi-element drag
+  const dragStartPositions = useRef<Map<string, { x: number; y: number; startX?: number; startY?: number; endX?: number; endY?: number }>>(new Map());
+
   // Wall preview state
   const [wallPreview, setWallPreview] = useState<{
     startX: number;
@@ -566,6 +569,8 @@ export function FarmCanvas({
             color: defaultColor,
             opacity: 1,
             presetId: activePresetId ?? undefined,
+            // Copy metadata from preset (e.g., levels, traysPerLevel, trayCapacity for grow racks)
+            metadata: activePreset?.metadata ? { ...activePreset.metadata } as CanvasElement['metadata'] : undefined,
           };
           addElement(newElement);
           setSelectedId(newElement.id, 'element');
@@ -871,10 +876,66 @@ export function FarmCanvas({
     [activeTool, setSelectedId, toggleSelection, selectedIds, elements, onElementSelect, onMultiSelect, addMeasurePoint, getScaledPos]
   );
 
-  // Handle drag start - push history so we can undo
-  const handleDragStart = useCallback(() => {
-    pushHistory();
-  }, [pushHistory]);
+  // Handle drag start - capture initial positions for multi-drag (history pushed on drag END)
+  const handleDragStart = useCallback((draggedElementId: string) => {
+    // Store initial positions of all selected elements for multi-drag
+    dragStartPositions.current.clear();
+    if (selectedIds.length > 1 && selectedIds.includes(draggedElementId)) {
+      for (const id of selectedIds) {
+        const el = elements.find((e) => e.id === id);
+        if (el) {
+          if (el.type === 'WALL' || (el.type === 'WALKWAY' && el.startX !== undefined)) {
+            dragStartPositions.current.set(id, {
+              x: 0,
+              y: 0,
+              startX: el.startX ?? 0,
+              startY: el.startY ?? 0,
+              endX: el.endX ?? 0,
+              endY: el.endY ?? 0,
+            });
+          } else {
+            dragStartPositions.current.set(id, {
+              x: el.x ?? 0,
+              y: el.y ?? 0,
+            });
+          }
+        }
+      }
+    }
+  }, [selectedIds, elements]);
+
+  // Handle multi-element drag move - moves all selected elements together
+  const handleMultiDragMove = useCallback((draggedElementId: string, newX: number, newY: number) => {
+    if (selectedIds.length <= 1 || !selectedIds.includes(draggedElementId)) return;
+
+    const draggedStart = dragStartPositions.current.get(draggedElementId);
+    if (!draggedStart) return;
+
+    const dx = newX - draggedStart.x;
+    const dy = newY - draggedStart.y;
+
+    // Move all other selected elements visually
+    for (const id of selectedIds) {
+      if (id === draggedElementId) continue;
+
+      const node = selectedShapesRef.current.get(id);
+      const startPos = dragStartPositions.current.get(id);
+      if (!node || !startPos) continue;
+
+      const el = elements.find((e) => e.id === id);
+      if (!el) continue;
+
+      if (el.type === 'WALL' || (el.type === 'WALKWAY' && el.startX !== undefined)) {
+        // For walls/line walkways, we need to offset from origin since they use startX/startY
+        node.x(dx);
+        node.y(dy);
+      } else {
+        // For regular elements, set to new position
+        node.x(startPos.x + dx);
+        node.y(startPos.y + dy);
+      }
+    }
+  }, [selectedIds, elements]);
 
   // Handle element drag (for non-wall elements like tables, sinks, etc.) - moves all selected elements
   const handleElementDragEnd = useCallback(
@@ -889,6 +950,9 @@ export function FarmCanvas({
       const snappedY = snapToGridValue(newY, unitGridSize);
       const dx = snappedX - origX;
       const dy = snappedY - origY;
+
+      // Skip if no actual movement
+      if (dx === 0 && dy === 0) return;
 
       // If multiple elements are selected and dragged element is one of them,
       // move all selected elements
@@ -922,8 +986,11 @@ export function FarmCanvas({
         // Single element drag
         updateElement(element.id, { x: snappedX, y: snappedY });
       }
+
+      // Push history AFTER making changes (so history contains the new state)
+      pushHistory();
     },
-    [snapToGrid, unitGridSize, updateElement, selectedIds, elements]
+    [snapToGrid, unitGridSize, updateElement, selectedIds, elements, pushHistory]
   );
 
   // Handle element transform (resize/rotate)
@@ -955,8 +1022,11 @@ export function FarmCanvas({
         height: newHeight,
         rotation: node.rotation(),
       });
+
+      // Push history AFTER transform for undo support
+      pushHistory();
     },
-    [snapToGrid, unitGridSize, updateElement]
+    [snapToGrid, unitGridSize, updateElement, pushHistory]
   );
 
   // Render grid lines - each square = 1 unit (1 ft or 1 m)
@@ -1111,9 +1181,12 @@ export function FarmCanvas({
             });
           }
         }
+
+        // Push history AFTER making changes
+        pushHistory();
       }
     },
-    [snapToGrid, unitGridSize, updateElement, selectedIds, elements]
+    [snapToGrid, unitGridSize, updateElement, selectedIds, elements, pushHistory]
   );
 
   // Render wall element with gaps for attached doors
@@ -1208,7 +1281,7 @@ export function FarmCanvas({
             lineJoin="round"
             hitStrokeWidth={Math.max(thickness, 20)}
             draggable={activeTool === 'select'}
-            onDragStart={handleDragStart}
+            onDragStart={() => handleDragStart(element.id)}
             onDragMove={(e) => {
               const node = e.target;
               const dx = node.x();
@@ -1226,6 +1299,8 @@ export function FarmCanvas({
                 width: Math.abs(newEndX - newStartX) + thickness,
                 height: Math.abs(newEndY - newStartY) + thickness,
               });
+              // Move other selected elements during drag
+              handleMultiDragMove(element.id, dx, dy);
             }}
             onDragEnd={(e) => {
               handleWallDrag(element, e);
@@ -1245,7 +1320,7 @@ export function FarmCanvas({
               stroke="#fff"
               strokeWidth={2}
               draggable
-              onDragStart={handleDragStart}
+              onDragStart={() => handleDragStart(element.id)}
               onDragMove={(e) => {
                 // Real-time update during drag with wall snapping
                 const node = e.target;
@@ -1264,6 +1339,9 @@ export function FarmCanvas({
                   startX: snapped.x,
                   startY: snapped.y,
                 });
+
+                // Push history AFTER making changes
+                pushHistory();
 
                 // Reset handle to origin (start point is always at 0,0 relative to group)
                 node.x(0);
@@ -1287,7 +1365,7 @@ export function FarmCanvas({
               stroke="#fff"
               strokeWidth={2}
               draggable
-              onDragStart={handleDragStart}
+              onDragStart={() => handleDragStart(element.id)}
               onDragMove={(e) => {
                 // Real-time update during drag with wall snapping
                 const node = e.target;
@@ -1306,6 +1384,9 @@ export function FarmCanvas({
                   endX: snapped.x,
                   endY: snapped.y,
                 });
+
+                // Push history AFTER making changes
+                pushHistory();
 
                 // Reset handle to new relative position
                 node.x(snapped.x - startX);
@@ -1425,7 +1506,12 @@ export function FarmCanvas({
           e.cancelBubble = true;
         }}
         onClick={(e) => handleElementClick(element, e)}
-        onDragStart={handleDragStart}
+        onDragStart={() => handleDragStart(element.id)}
+        onDragMove={(e) => {
+          const node = e.target;
+          // Move other selected elements during drag
+          handleMultiDragMove(element.id, node.x(), node.y());
+        }}
         onDragEnd={(e) => {
           // Get the group's new center position after drag
           const group = e.target;
@@ -1547,7 +1633,7 @@ export function FarmCanvas({
           cornerRadius={4}
           hitStrokeWidth={Math.max(thickness, 20)}
           draggable={activeTool === 'select'}
-          onDragStart={handleDragStart}
+          onDragStart={() => handleDragStart(element.id)}
           onDragMove={(e) => {
             const node = e.target;
             const dx = node.x();
@@ -1569,6 +1655,8 @@ export function FarmCanvas({
               width: Math.abs(newEndX - newStartX) + thickness,
               height: Math.abs(newEndY - newStartY) + thickness,
             });
+            // Move other selected elements during drag
+            handleMultiDragMove(element.id, worldDx, worldDy);
           }}
           onDragEnd={(e) => {
             // Get the delta movement
@@ -1650,7 +1738,7 @@ export function FarmCanvas({
               stroke="#fff"
               strokeWidth={2}
               draggable
-              onDragStart={handleDragStart}
+              onDragStart={() => handleDragStart(element.id)}
               onDragMove={(e) => {
                 const node = e.target;
                 const worldPos = {
@@ -1696,7 +1784,7 @@ export function FarmCanvas({
               stroke="#fff"
               strokeWidth={2}
               draggable
-              onDragStart={handleDragStart}
+              onDragStart={() => handleDragStart(element.id)}
               onDragMove={(e) => {
                 const node = e.target;
                 const worldPos = {
@@ -1774,15 +1862,19 @@ export function FarmCanvas({
           e.cancelBubble = true;
         }}
         onClick={(e) => handleElementClick(element, e)}
-        onDragStart={handleDragStart}
+        onDragStart={() => handleDragStart(element.id)}
         onDragMove={(e) => {
           const node = e.target;
+          const newX = node.x();
+          const newY = node.y();
           calculateDistanceGuides(element.id, {
-            x: node.x(),
-            y: node.y(),
+            x: newX,
+            y: newY,
             width: elementWidth,
             height: elementHeight,
           });
+          // Move other selected elements during drag
+          handleMultiDragMove(element.id, newX, newY);
         }}
         onDragEnd={(e) => {
           handleElementDragEnd(element, e);
@@ -1978,12 +2070,12 @@ export function FarmCanvas({
           if (element.type === 'WALKWAY' && element.startX !== undefined) return renderWalkway(element);
           return renderRectElement(element);
         })}
-        {/* Transformer for resize/rotate - only for non-wall, non-door, and non-line-walkway elements */}
+        {/* Transformer for resize/rotate - exclude walls, doors, grow racks, and line-walkways */}
         {selectedIds.length > 0 && selectedType === 'element' && selectedIds.some(id => {
           const el = elements.find(e => e.id === id);
-          // Exclude walls, doors, and line-based walkways (they have custom handles)
+          // Exclude walls, doors, grow racks (use properties panel), and line-based walkways (they have custom handles)
           const isLineWalkway = el?.type === 'WALKWAY' && el.startX !== undefined;
-          return el && el.type !== 'WALL' && el.type !== 'DOOR' && !isLineWalkway;
+          return el && el.type !== 'WALL' && el.type !== 'DOOR' && el.type !== 'GROW_RACK' && !isLineWalkway;
         }) && (
           <Transformer
             ref={transformerRef}

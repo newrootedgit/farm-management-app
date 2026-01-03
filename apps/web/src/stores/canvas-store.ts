@@ -160,6 +160,7 @@ interface CanvasState {
   redo: () => void;
   canUndo: () => boolean;
   canRedo: () => boolean;
+  resetHistory: () => void;
 
   // Dirty state
   isDirty: boolean;
@@ -482,6 +483,17 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   },
   canUndo: () => get().historyIndex > 0,
   canRedo: () => get().historyIndex < get().history.length - 1,
+  resetHistory: () => {
+    const { zones, elements } = get();
+    // Reset history to just the current state (becomes the new baseline after save)
+    set({
+      history: [{
+        zones: zones.map(z => ({ ...z })),
+        elements: elements.map(e => ({ ...e, metadata: e.metadata ? { ...e.metadata } : undefined })),
+      }],
+      historyIndex: 0,
+    });
+  },
 
   // Dirty state
   isDirty: false,
