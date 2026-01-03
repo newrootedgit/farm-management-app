@@ -130,6 +130,7 @@ interface CanvasState {
   elements: CanvasElement[];
   setElements: (elements: CanvasElement[]) => void;
   addElement: (element: CanvasElement) => void;
+  addElements: (elements: CanvasElement[]) => void;  // Batch add (single undo)
   updateElement: (id: string, updates: Partial<CanvasElement>) => void;
   deleteElement: (id: string) => void;
 
@@ -335,6 +336,14 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     }));
     get().pushHistory();
   },
+  addElements: (newElements) => {
+    if (newElements.length === 0) return;
+    set((state) => ({
+      elements: [...state.elements, ...newElements],
+      isDirty: true,
+    }));
+    get().pushHistory();
+  },
   updateElement: (id, updates) => {
     set((state) => ({
       elements: state.elements.map((e) => (e.id === id ? { ...e, ...updates } : e)),
@@ -427,24 +436,34 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   pushHistory: () => {
     const { zones, elements, history, historyIndex } = get();
     const newHistory = history.slice(0, historyIndex + 1);
+    // Deep clone to prevent mutations from affecting history
     newHistory.push({
-      zones: [...zones],
-      elements: [...elements],
+      zones: zones.map(z => ({ ...z })),
+      elements: elements.map(e => ({ ...e, metadata: e.metadata ? { ...e.metadata } : undefined })),
     });
+    const finalHistory = newHistory.slice(-50);
     set({
-      history: newHistory.slice(-50), // Keep last 50 states
-      historyIndex: newHistory.length - 1,
+      history: finalHistory,
+      historyIndex: finalHistory.length - 1,
     });
   },
   undo: () => {
     const { history, historyIndex } = get();
     if (historyIndex > 0) {
       const prevState = history[historyIndex - 1];
+      // Deep clone to prevent mutations
+      const newElements = prevState.elements.map(e => ({ ...e, metadata: e.metadata ? { ...e.metadata } : undefined }));
+      const newElementIds = new Set(newElements.map(e => e.id));
+      const { selectedIds } = get();
+      // Filter out selected IDs that no longer exist
+      const validSelectedIds = selectedIds.filter(id => newElementIds.has(id));
       set({
-        zones: [...prevState.zones],
-        elements: [...prevState.elements],
+        zones: prevState.zones.map(z => ({ ...z })),
+        elements: newElements,
         historyIndex: historyIndex - 1,
         isDirty: true,
+        selectedIds: validSelectedIds,
+        selectedType: validSelectedIds.length > 0 ? 'element' : null,
       });
     }
   },
@@ -452,9 +471,10 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     const { history, historyIndex } = get();
     if (historyIndex < history.length - 1) {
       const nextState = history[historyIndex + 1];
+      // Deep clone to prevent mutations
       set({
-        zones: [...nextState.zones],
-        elements: [...nextState.elements],
+        zones: nextState.zones.map(z => ({ ...z })),
+        elements: nextState.elements.map(e => ({ ...e, metadata: e.metadata ? { ...e.metadata } : undefined })),
         historyIndex: historyIndex + 1,
         isDirty: true,
       });

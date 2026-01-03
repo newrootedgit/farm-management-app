@@ -53,9 +53,12 @@ export default function FarmLayout() {
     setUnitSystem,
     resetWallDrawing,
     addElement: addElementToStore,
+    addElements: addElementsToStore,
+    updateElement,
     undo,
     redo,
     setActiveTool,
+    pushHistory,
   } = useCanvasStore();
 
   // Local state
@@ -70,9 +73,15 @@ export default function FarmLayout() {
   const [clipboard, setClipboard] = useState<CanvasElement[]>([]);
   const [saveNotification, setSaveNotification] = useState<string | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const historyInitializedRef = useRef(false);
+  const isSavingRef = useRef(false);
 
   // Sync API elements to canvas store on load
   useEffect(() => {
+    // Skip sync while saving to prevent duplicates from React Query refetches
+    if (isSavingRef.current) {
+      return;
+    }
     if (apiElements) {
       const canvasElements: CanvasElement[] = apiElements.map((el) => {
         // For walls, ensure coordinates are numbers (API might return null/string)
@@ -100,8 +109,16 @@ export default function FarmLayout() {
         };
       });
       setElements(canvasElements);
+      // Initialize history only once on first load
+      if (!historyInitializedRef.current) {
+        console.log('[FarmLayout] Initializing history on first load');
+        pushHistory();
+        historyInitializedRef.current = true;
+      } else {
+        console.log('[FarmLayout] Skipping history init - already initialized');
+      }
     }
-  }, [apiElements, setElements]);
+  }, [apiElements, setElements, pushHistory]);
 
   // Sync user preferences
   useEffect(() => {
@@ -219,7 +236,7 @@ export default function FarmLayout() {
         if (clipboard.length > 0) {
           e.preventDefault();
           const offset = 20; // Offset so pasted items are visible
-          const newIds: string[] = [];
+          const newElements: CanvasElement[] = [];
 
           for (const el of clipboard) {
             const newElement: CanvasElement = {
@@ -240,16 +257,17 @@ export default function FarmLayout() {
               newElement.y = (el.y ?? 0) + offset;
             }
 
-            addElementToStore(newElement);
-            newIds.push(newElement.id);
+            newElements.push(newElement);
           }
+
+          // Add all elements at once (single undo operation)
+          addElementsToStore(newElements);
+          const newIds = newElements.map(el => el.id);
 
           // Select all newly pasted elements
           if (newIds.length === 1) {
             setSelectedId(newIds[0], 'element');
           } else if (newIds.length > 1) {
-            // Select all pasted elements
-            const { selectedIds: _, ...rest } = useCanvasStore.getState();
             useCanvasStore.setState({ selectedIds: newIds, selectedType: 'element' });
           }
         }
@@ -262,7 +280,7 @@ export default function FarmLayout() {
         const offset = 20;
 
         if (selectedIds.length > 0 && selectedType === 'element' && selectedElements.length > 0) {
-          const newIds: string[] = [];
+          const newElements: CanvasElement[] = [];
 
           for (const el of selectedElements) {
             const newElement: CanvasElement = {
@@ -282,9 +300,12 @@ export default function FarmLayout() {
               newElement.y = (el.y ?? 0) + offset;
             }
 
-            addElementToStore(newElement);
-            newIds.push(newElement.id);
+            newElements.push(newElement);
           }
+
+          // Add all elements at once (single undo operation)
+          addElementsToStore(newElements);
+          const newIds = newElements.map(el => el.id);
 
           // Select all duplicated elements
           if (newIds.length === 1) {
@@ -362,6 +383,9 @@ export default function FarmLayout() {
   const handleSave = useCallback(async () => {
     if (!currentFarmId) return;
 
+    // Set saving flag to prevent useEffect sync during save
+    isSavingRef.current = true;
+
     try {
       // Save layout canvas data
       await updateLayout.mutateAsync({
@@ -396,6 +420,7 @@ export default function FarmLayout() {
             color: el.color,
             opacity: el.opacity,
             metadata: el.metadata,
+            presetId: el.presetId,
           });
         }
 
@@ -418,6 +443,7 @@ export default function FarmLayout() {
               color: el.color,
               opacity: el.opacity,
               metadata: el.metadata,
+              presetId: el.presetId,
             },
           }));
 
@@ -434,6 +460,11 @@ export default function FarmLayout() {
       console.error('Failed to save layout:', error);
       setSaveNotification('Failed to save layout');
       setTimeout(() => setSaveNotification(null), 3000);
+    } finally {
+      // Clear saving flag after a short delay to allow React Query to settle
+      setTimeout(() => {
+        isSavingRef.current = false;
+      }, 500);
     }
   }, [currentFarmId, layout, elements, apiElements, updateLayout, createElement, bulkUpdateElements, setDirty]);
 
@@ -682,7 +713,44 @@ export default function FarmLayout() {
           createPreset.mutate(data);
         }}
         onUpdatePreset={(presetId, data) => {
+          // Update the preset in the database
           updatePreset.mutate({ presetId, data });
+
+          // Update all canvas elements that use this preset
+          const elementsUsingPreset = elements.filter(el => el.presetId === presetId);
+          if (elementsUsingPreset.length > 0) {
+            // Push history before making changes for undo support
+            pushHistory();
+
+            for (const el of elementsUsingPreset) {
+              const updates: Partial<CanvasElement> = {};
+
+              // Update dimensions if provided
+              if (data.defaultWidth !== undefined) {
+                updates.width = data.defaultWidth;
+              }
+              if (data.defaultHeight !== undefined) {
+                updates.height = data.defaultHeight;
+              }
+
+              // Update color if provided
+              if (data.defaultColor !== undefined) {
+                updates.color = data.defaultColor;
+              }
+
+              // Update metadata if provided (for grow racks: levels, traysPerLevel, trayCapacity)
+              if (data.metadata) {
+                updates.metadata = {
+                  ...el.metadata,
+                  ...data.metadata,
+                };
+              }
+
+              updateElement(el.id, updates);
+            }
+
+            setDirty(true);
+          }
         }}
         onDeletePreset={(presetId) => {
           deletePreset.mutate(presetId);
