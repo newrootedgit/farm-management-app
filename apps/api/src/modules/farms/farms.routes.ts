@@ -590,6 +590,234 @@ const farmsRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   // ============================================================================
+  // RACK ASSIGNMENTS (Production Tracking)
+  // ============================================================================
+
+  // List all active rack assignments with product/order details
+  fastify.get('/farms/:farmId/rack-assignments', {
+    preHandler: [requireAuth()],
+  }, async (request, reply) => {
+    try {
+      const { farmId } = request.params as { farmId: string };
+
+      if (!request.farmId) {
+        throw new ForbiddenError('Access denied');
+      }
+
+      const assignments = await fastify.prisma.rackAssignment.findMany({
+        where: { farmId, isActive: true },
+        include: {
+          rackElement: {
+            select: {
+              id: true,
+              name: true,
+              metadata: true,
+            },
+          },
+          orderItem: {
+            include: {
+              product: {
+                select: {
+                  id: true,
+                  name: true,
+                },
+              },
+              order: {
+                select: {
+                  id: true,
+                  orderNumber: true,
+                  customerName: true,
+                },
+              },
+            },
+          },
+        },
+        orderBy: [
+          { rackElementId: 'asc' },
+          { level: 'asc' },
+        ],
+      });
+
+      return {
+        success: true,
+        data: assignments,
+      };
+    } catch (error) {
+      return handleError(error, reply);
+    }
+  });
+
+  // Get assignments for a specific rack element
+  fastify.get('/farms/:farmId/rack-assignments/by-rack/:rackId', {
+    preHandler: [requireAuth()],
+  }, async (request, reply) => {
+    try {
+      const { farmId, rackId } = request.params as { farmId: string; rackId: string };
+
+      if (!request.farmId) {
+        throw new ForbiddenError('Access denied');
+      }
+
+      const assignments = await fastify.prisma.rackAssignment.findMany({
+        where: {
+          farmId,
+          rackElementId: rackId,
+          isActive: true,
+        },
+        include: {
+          orderItem: {
+            include: {
+              product: {
+                select: {
+                  id: true,
+                  name: true,
+                },
+              },
+              order: {
+                select: {
+                  id: true,
+                  orderNumber: true,
+                  customerName: true,
+                },
+              },
+            },
+          },
+        },
+        orderBy: { level: 'asc' },
+      });
+
+      return {
+        success: true,
+        data: assignments,
+      };
+    } catch (error) {
+      return handleError(error, reply);
+    }
+  });
+
+  // Create rack assignment (typically when completing MOVE_TO_LIGHT task)
+  fastify.post('/farms/:farmId/rack-assignments', {
+    preHandler: [requireAuth()],
+  }, async (request, reply) => {
+    try {
+      const { farmId } = request.params as { farmId: string };
+      const body = request.body as {
+        rackElementId: string;
+        level: number;
+        orderItemId: string;
+        trayCount: number;
+        taskId?: string;
+        assignedBy?: string;
+      };
+
+      if (!request.farmId) {
+        throw new ForbiddenError('Access denied');
+      }
+
+      // Validate the rack element exists and is a GROW_RACK
+      const rackElement = await fastify.prisma.layoutElement.findFirst({
+        where: {
+          id: body.rackElementId,
+          farmId,
+          type: 'GROW_RACK',
+        },
+      });
+
+      if (!rackElement) {
+        throw new NotFoundError('Grow rack not found');
+      }
+
+      // Validate the order item exists
+      const orderItem = await fastify.prisma.orderItem.findFirst({
+        where: {
+          id: body.orderItemId,
+          order: { farmId },
+        },
+      });
+
+      if (!orderItem) {
+        throw new NotFoundError('Order item not found');
+      }
+
+      // Check if level is valid based on rack metadata
+      const rackMetadata = rackElement.metadata as { levels?: number } | null;
+      const maxLevels = rackMetadata?.levels ?? 1;
+      if (body.level < 1 || body.level > maxLevels) {
+        throw new BadRequestError(`Level must be between 1 and ${maxLevels}`);
+      }
+
+      const assignment = await fastify.prisma.rackAssignment.create({
+        data: {
+          farmId,
+          rackElementId: body.rackElementId,
+          level: body.level,
+          orderItemId: body.orderItemId,
+          trayCount: body.trayCount,
+          taskId: body.taskId,
+          assignedBy: body.assignedBy,
+        },
+        include: {
+          rackElement: {
+            select: {
+              id: true,
+              name: true,
+              metadata: true,
+            },
+          },
+          orderItem: {
+            include: {
+              product: {
+                select: {
+                  id: true,
+                  name: true,
+                },
+              },
+            },
+          },
+        },
+      });
+
+      return reply.status(201).send({
+        success: true,
+        data: assignment,
+      });
+    } catch (error) {
+      return handleError(error, reply);
+    }
+  });
+
+  // Remove rack assignment (soft delete - marks as inactive)
+  fastify.delete('/farms/:farmId/rack-assignments/:assignmentId', {
+    preHandler: [requireAuth()],
+  }, async (request, reply) => {
+    try {
+      const { farmId, assignmentId } = request.params as { farmId: string; assignmentId: string };
+
+      if (!request.farmId) {
+        throw new ForbiddenError('Access denied');
+      }
+
+      const assignment = await fastify.prisma.rackAssignment.update({
+        where: {
+          id: assignmentId,
+          farmId,
+        },
+        data: {
+          isActive: false,
+          removedAt: new Date(),
+        },
+      });
+
+      return {
+        success: true,
+        data: assignment,
+      };
+    } catch (error) {
+      return handleError(error, reply);
+    }
+  });
+
+  // ============================================================================
   // USER PREFERENCES
   // ============================================================================
 
@@ -1083,6 +1311,157 @@ const farmsRoutes: FastifyPluginAsync = async (fastify) => {
     }
   });
 
+  // Clone order (create a copy with new dates)
+  fastify.post('/farms/:farmId/orders/:orderId/clone', {
+    preHandler: [requireAuth(), requireRole('FARM_MANAGER')],
+  }, async (request, reply) => {
+    try {
+      const { farmId, orderId } = request.params as { farmId: string; orderId: string };
+      const { harvestDateOffset } = request.body as { harvestDateOffset?: number };
+
+      // Get original order with items and product data
+      const originalOrder = await fastify.prisma.order.findUnique({
+        where: { id: orderId, farmId },
+        include: {
+          items: {
+            include: { product: true },
+          },
+        },
+      });
+
+      if (!originalOrder) {
+        throw new NotFoundError('Order', orderId);
+      }
+
+      // Default offset is 7 days if not provided
+      const offsetDays = harvestDateOffset ?? 7;
+
+      // Generate new order number
+      const count = await fastify.prisma.order.count({ where: { farmId } });
+      const newOrderNumber = generateOrderNumber(count + 1);
+
+      // Create cloned order in a transaction
+      const clonedOrder = await fastify.prisma.$transaction(async (tx) => {
+        // Create the new order
+        const newOrder = await tx.order.create({
+          data: {
+            farmId,
+            orderNumber: newOrderNumber,
+            customerName: originalOrder.customerName,
+            customerId: originalOrder.customerId,
+            notes: originalOrder.notes ? `Cloned from ${originalOrder.orderNumber}. ${originalOrder.notes}` : `Cloned from ${originalOrder.orderNumber}`,
+          },
+        });
+
+        // Clone each item with new dates
+        for (const item of originalOrder.items) {
+          const product = item.product;
+
+          // Calculate new harvest date
+          const newHarvestDate = new Date(item.harvestDate);
+          newHarvestDate.setDate(newHarvestDate.getDate() + offsetDays);
+
+          // Recalculate production schedule
+          const schedule = calculateProductionSchedule({
+            quantityOz: item.quantityOz,
+            avgYieldPerTray: product.avgYieldPerTray || 8,
+            overagePercent: item.overagePercent,
+            harvestDate: newHarvestDate,
+            daysSoaking: product.daysSoaking,
+            daysGermination: product.daysGermination || 0,
+            daysLight: product.daysLight || 0,
+          });
+
+          // Create cloned order item
+          const newItem = await tx.orderItem.create({
+            data: {
+              orderId: newOrder.id,
+              productId: item.productId,
+              quantityOz: item.quantityOz,
+              harvestDate: newHarvestDate,
+              overagePercent: item.overagePercent,
+              traysNeeded: schedule.traysNeeded,
+              soakDate: schedule.soakDate,
+              seedDate: schedule.seedDate,
+              moveToLightDate: schedule.moveToLightDate,
+            },
+          });
+
+          // Auto-generate tasks for the cloned item
+          const tasks: Array<{
+            title: string;
+            type: 'SOAK' | 'SEED' | 'MOVE_TO_LIGHT' | 'HARVESTING';
+            dueDate: Date;
+            description: string;
+          }> = [];
+
+          // Only add SOAK task if this variety requires soaking
+          if (schedule.requiresSoaking) {
+            tasks.push({
+              title: `SOAK: ${product.name}`,
+              type: 'SOAK',
+              dueDate: schedule.soakDate,
+              description: `Soak ${schedule.traysNeeded} trays of ${product.name} seeds`,
+            });
+          }
+
+          tasks.push(
+            {
+              title: `SEED: ${product.name}`,
+              type: 'SEED',
+              dueDate: schedule.seedDate,
+              description: `Plant ${schedule.traysNeeded} trays of ${product.name}`,
+            },
+            {
+              title: `MOVE TO LIGHT: ${product.name}`,
+              type: 'MOVE_TO_LIGHT',
+              dueDate: schedule.moveToLightDate,
+              description: `Move ${schedule.traysNeeded} trays of ${product.name} to grow lights`,
+            },
+            {
+              title: `HARVEST: ${product.name}`,
+              type: 'HARVESTING',
+              dueDate: schedule.harvestDate,
+              description: `Harvest ${item.quantityOz}oz of ${product.name} (${schedule.traysNeeded} trays)`,
+            }
+          );
+
+          for (const taskData of tasks) {
+            await tx.task.create({
+              data: {
+                farmId,
+                orderItemId: newItem.id,
+                title: taskData.title,
+                type: taskData.type,
+                dueDate: taskData.dueDate,
+                description: taskData.description,
+                priority: 'MEDIUM',
+                status: 'TODO',
+              },
+            });
+          }
+        }
+
+        // Return complete cloned order
+        return tx.order.findUnique({
+          where: { id: newOrder.id },
+          include: {
+            items: {
+              include: { product: true, tasks: true },
+            },
+          },
+        });
+      });
+
+      return reply.status(201).send({
+        success: true,
+        data: clonedOrder,
+      });
+    } catch (error) {
+      return handleError(error, reply);
+    }
+  });
+
   // Update order item
   fastify.patch('/farms/:farmId/orders/:orderId/items/:itemId', {
     preHandler: [requireAuth(), requireRole('FARM_MANAGER')],
@@ -1414,6 +1793,11 @@ const farmsRoutes: FastifyPluginAsync = async (fastify) => {
           updateData.actualTrays = actualTrays;
         }
 
+        // For SEED tasks, store the seedLot on the OrderItem for traceability
+        if (task.type === 'SEED' && seedLot) {
+          updateData.seedLot = seedLot;
+        }
+
         await fastify.prisma.orderItem.update({
           where: { id: task.orderItemId },
           data: updateData,
@@ -1437,6 +1821,18 @@ const farmsRoutes: FastifyPluginAsync = async (fastify) => {
               });
             }
           }
+
+          // Free up rack locations when harvested
+          await fastify.prisma.rackAssignment.updateMany({
+            where: {
+              orderItemId: task.orderItemId,
+              isActive: true,
+            },
+            data: {
+              isActive: false,
+              removedAt: new Date(),
+            },
+          });
 
           // Update product's average yield per tray based on actual harvest data
           if (actualYieldOz != null && actualTrays != null && actualTrays > 0) {

@@ -70,6 +70,7 @@ export const OrderItemSchema = z.object({
   moveToLightDate: z.date(),
   actualYieldOz: z.number().positive().nullable(),
   actualTrays: z.number().int().positive().nullable(),
+  seedLot: z.string().nullable(),
   status: OrderItemStatusSchema,
   createdAt: z.date(),
   updatedAt: z.date(),

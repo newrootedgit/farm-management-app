@@ -63,6 +63,7 @@ model Farm {
   tasks              Task[]
   paymentSettings    PaymentSettings?
   payments           Payment[]
+  rackAssignments    RackAssignment[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -161,6 +162,9 @@ model LayoutElement {
   // Flexible metadata
   metadata Json?
 
+  // Rack assignments (for GROW_RACK elements)
+  rackAssignments RackAssignment[]
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -172,7 +176,47 @@ enum ElementType {
   SINK
   TABLE
   GROW_RACK
+  WALKWAY
+  CIRCLE
   CUSTOM
+}
+
+// ============================================================================
+// RACK ASSIGNMENTS (Production Tracking)
+// ============================================================================
+
+model RackAssignment {
+  id            String    @id @default(cuid())
+  farmId        String
+  farm          Farm      @relation(fields: [farmId], references: [id], onDelete: Cascade)
+
+  // The grow rack element this assignment is for
+  rackElementId String
+  rackElement   LayoutElement @relation(fields: [rackElementId], references: [id], onDelete: Cascade)
+
+  level         Int       // 1-based level within rack (1 = bottom, n = top)
+
+  // What's being grown
+  orderItemId   String
+  orderItem     OrderItem @relation(fields: [orderItemId], references: [id], onDelete: Cascade)
+
+  trayCount     Int       // Number of trays on this rack/level
+  assignedAt    DateTime  @default(now())
+  assignedBy    String?   // Name of person who assigned
+
+  // The MOVE_TO_LIGHT task that created this assignment
+  taskId        String?   @unique
+  task          Task?     @relation(fields: [taskId], references: [id])
+
+  isActive      Boolean   @default(true)
+  removedAt     DateTime?
+
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@index([farmId])
+  @@index([rackElementId, level])
+  @@index([orderItemId])
 }
 
 model ElementPreset {
@@ -190,6 +234,9 @@ model ElementPreset {
   // Appearance defaults
   defaultColor String  @default("#666666")
   icon         String?
+
+  // Custom metadata (e.g., levels, traysPerLevel for grow racks)
+  metadata Json?
 
   elements LayoutElement[]
 
@@ -589,10 +636,12 @@ model OrderItem {
   // Actual results (filled after production)
   actualYieldOz Float?
   actualTrays   Int?
+  seedLot       String?   // Seed lot number for traceability (set during seeding)
 
   status OrderItemStatus @default(PENDING)
 
-  tasks Task[]
+  tasks           Task[]
+  rackAssignments RackAssignment[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -657,6 +706,7 @@ enum EmployeeStatus {
 }
 
 enum EmployeePosition {
+  ADMIN
   FARM_MANAGER
   SALESPERSON
   FARM_OPERATOR
@@ -983,6 +1033,9 @@ model Task {
   completionNotes String?   // Notes from completion
   actualTrays     Int?      // Actual trays processed (may differ from expected)
   seedLot         String?   // Seed lot number for traceability
+
+  // Rack assignment created when MOVE_TO_LIGHT task is completed
+  rackAssignment RackAssignment?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

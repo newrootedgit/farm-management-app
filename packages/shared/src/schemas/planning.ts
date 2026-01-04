@@ -196,6 +196,7 @@ export type Task = z.infer<typeof TaskSchema> & {
     quantityOz: number;
     traysNeeded: number;
     harvestDate: Date;
+    seedLot?: string | null;
     product?: {
       id: string;
       name: string;
@@ -203,7 +204,7 @@ export type Task = z.infer<typeof TaskSchema> & {
     order?: {
       id: string;
       orderNumber: string;
-      customer: string;
+      customer: string | null;
     };
   } | null;
 };

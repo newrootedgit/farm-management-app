@@ -314,6 +314,50 @@ export function useDeleteProduct(farmId: string) {
 }
 
 // ============================================================================
+// TEAM (Owner + Employees)
+// ============================================================================
+
+interface TeamOwner {
+  id: string;
+  role: string;
+  userId: string;
+  user: {
+    id: string;
+    email: string;
+    name: string | null;
+    avatarUrl: string | null;
+  };
+}
+
+interface TeamData {
+  owner: TeamOwner | null;
+  employees: Employee[];
+}
+
+export function useTeam(farmId: string | undefined) {
+  return useQuery({
+    queryKey: ['farms', farmId, 'team'],
+    queryFn: () => fetchApi<TeamData>(`/api/v1/farms/${farmId}/team`),
+    enabled: !!farmId,
+  });
+}
+
+export function useUpdateOwner(farmId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (data: { name?: string; email?: string }) =>
+      fetchApi<TeamOwner>(`/api/v1/farms/${farmId}/team/owner`, {
+        method: 'PATCH',
+        body: JSON.stringify(data),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['farms', farmId, 'team'] });
+    },
+  });
+}
+
+// ============================================================================
 // EMPLOYEES
 // ============================================================================
 
@@ -507,6 +551,98 @@ export function useDeleteElementPreset(farmId: string) {
 }
 
 // ============================================================================
+// RACK ASSIGNMENTS (Production Tracking)
+// ============================================================================
+
+export interface RackAssignment {
+  id: string;
+  farmId: string;
+  rackElementId: string;
+  level: number;
+  orderItemId: string;
+  trayCount: number;
+  assignedAt: string;
+  assignedBy: string | null;
+  taskId: string | null;
+  isActive: boolean;
+  removedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+  rackElement: {
+    id: string;
+    name: string;
+    metadata: unknown;
+  };
+  orderItem: {
+    id: string;
+    quantityOz: number;
+    traysNeeded: number;
+    harvestDate: string;
+    product: {
+      id: string;
+      name: string;
+    };
+    order: {
+      id: string;
+      orderNumber: string;
+      customerName: string | null;
+    };
+  };
+}
+
+export interface CreateRackAssignment {
+  rackElementId: string;
+  level: number;
+  orderItemId: string;
+  trayCount: number;
+  taskId?: string;
+  assignedBy?: string;
+}
+
+export function useRackAssignments(farmId: string | undefined) {
+  return useQuery({
+    queryKey: ['farms', farmId, 'rack-assignments'],
+    queryFn: () => fetchApi<RackAssignment[]>(`/api/v1/farms/${farmId}/rack-assignments`),
+    enabled: !!farmId,
+  });
+}
+
+export function useRackAssignmentsByRack(farmId: string | undefined, rackId: string | undefined) {
+  return useQuery({
+    queryKey: ['farms', farmId, 'rack-assignments', 'by-rack', rackId],
+    queryFn: () => fetchApi<RackAssignment[]>(`/api/v1/farms/${farmId}/rack-assignments/by-rack/${rackId}`),
+    enabled: !!farmId && !!rackId,
+  });
+}
+
+export function useCreateRackAssignment(farmId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (data: CreateRackAssignment) =>
+      fetchApi<RackAssignment>(`/api/v1/farms/${farmId}/rack-assignments`, {
+        method: 'POST',
+        body: JSON.stringify(data),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['farms', farmId, 'rack-assignments'] });
+    },
+  });
+}
+
+export function useRemoveRackAssignment(farmId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (assignmentId: string) =>
+      fetchApi(`/api/v1/farms/${farmId}/rack-assignments/${assignmentId}`, { method: 'DELETE' }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['farms', farmId, 'rack-assignments'] });
+    },
+  });
+}
+
+// ============================================================================
 // USER PREFERENCES
 // ============================================================================
 
@@ -607,6 +743,22 @@ export function useDeleteOrder(farmId: string) {
   });
 }
 
+export function useCloneOrder(farmId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ orderId, harvestDateOffset }: { orderId: string; harvestDateOffset?: number }) =>
+      fetchApi<OrderWithItems>(`/api/v1/farms/${farmId}/orders/${orderId}/clone`, {
+        method: 'POST',
+        body: JSON.stringify({ harvestDateOffset }),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['farms', farmId, 'orders'] });
+      queryClient.invalidateQueries({ queryKey: ['farms', farmId, 'tasks'] });
+    },
+  });
+}
+
 export function useUpdateOrderItem(farmId: string, orderId: string) {
   const queryClient = useQueryClient();
 
@@ -627,8 +779,13 @@ export function useUpdateOrderItem(farmId: string, orderId: string) {
 // TASKS
 // ============================================================================
 
-interface TaskWithRelations extends Task {
+interface TaskWithRelations extends Omit<Task, 'orderItem'> {
   orderItem?: {
+    id: string;
+    quantityOz: number;
+    traysNeeded: number;
+    harvestDate: Date;
+    seedLot?: string | null;
     product: Product;
     order: Order;
   } | null;

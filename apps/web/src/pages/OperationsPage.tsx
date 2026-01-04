@@ -1,9 +1,14 @@
 import { useState, useMemo } from 'react';
 import { useFarmStore } from '@/stores/farm-store';
-import { useTasks, useCompleteTask } from '@/lib/api-client';
+import { useTasks, useCompleteTask, useCreateRackAssignment } from '@/lib/api-client';
+import TaskCalendar from '@/components/operations/TaskCalendar';
+import SeedingView from '@/components/operations/SeedingView';
+import TransplantView from '@/components/operations/TransplantView';
+import HarvestView from '@/components/operations/HarvestView';
+import { RackSelector, type RackAllocation } from '@/components/operations/RackSelector';
 import type { Task } from '@farm/shared';
 
-type ViewMode = 'all' | 'daily' | 'weekly' | 'monthly';
+type ViewMode = 'all' | 'calendar' | 'seeding' | 'transplant' | 'harvest';
 
 interface TaskLogFormData {
   completedBy: string;
@@ -13,6 +18,8 @@ interface TaskLogFormData {
   completedDate: string;
   completedTime: string;
   completionNotes: string;
+  // For MOVE_TO_LIGHT tasks
+  rackDestination: RackAllocation | null;
 }
 
 const getDefaultFormData = (): TaskLogFormData => {
@@ -25,6 +32,7 @@ const getDefaultFormData = (): TaskLogFormData => {
     completedDate: now.toISOString().split('T')[0],
     completedTime: now.toTimeString().slice(0, 5),
     completionNotes: '',
+    rackDestination: null,
   };
 };
 
@@ -32,13 +40,9 @@ export default function OperationsPage() {
   const { currentFarmId } = useFarmStore();
   const { data: tasks, isLoading } = useTasks(currentFarmId ?? undefined);
   const completeTask = useCompleteTask(currentFarmId ?? '');
+  const createRackAssignment = useCreateRackAssignment(currentFarmId ?? '');
 
-  const [viewMode, setViewMode] = useState<ViewMode>('daily');
-  const [selectedDate, setSelectedDate] = useState(() => {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    return today;
-  });
+  const [viewMode, setViewMode] = useState<ViewMode>('calendar');
   const [loggingTask, setLoggingTask] = useState<Task | null>(null);
   const [logForm, setLogForm] = useState<TaskLogFormData>(getDefaultFormData());
   const [logError, setLogError] = useState<string | null>(null);
@@ -78,45 +82,12 @@ export default function OperationsPage() {
       });
   }, [tasks, showCompleted]);
 
-  // Get date range based on view mode
-  const getDateRange = () => {
-    const start = new Date(today);
-    const end = new Date(today);
-
-    switch (viewMode) {
-      case 'daily':
-        // Use selectedDate for daily view
-        return { start: selectedDate, end: selectedDate };
-      case 'weekly':
-        end.setDate(end.getDate() + 7);
-        return { start: today, end };
-      case 'monthly':
-        end.setMonth(end.getMonth() + 1);
-        return { start: today, end };
-      case 'all':
-      default:
-        return null; // No date filtering
-    }
-  };
-
-  // Filter tasks by date range
-  const tasksInRange = useMemo(() => {
-    const range = getDateRange();
-    if (!range) return filteredTasks;
-
-    return filteredTasks.filter((task) => {
-      if (!task.dueDate) return false;
-      const taskDate = new Date(task.dueDate);
-      taskDate.setHours(0, 0, 0, 0);
-      return taskDate >= range.start && taskDate <= range.end;
-    });
-  }, [filteredTasks, viewMode, selectedDate]);
 
   // Group tasks by date
   const tasksByDate = useMemo(() => {
     const grouped: Record<string, Task[]> = {};
 
-    tasksInRange.forEach((task) => {
+    filteredTasks.forEach((task) => {
       if (!task.dueDate) return;
       const dateKey = new Date(task.dueDate).toDateString();
       if (!grouped[dateKey]) {
@@ -135,7 +106,7 @@ export default function OperationsPage() {
     });
 
     return grouped;
-  }, [tasksInRange]);
+  }, [filteredTasks]);
 
   // Get sorted date keys
   const sortedDateKeys = useMemo(() => {
@@ -144,42 +115,6 @@ export default function OperationsPage() {
     );
   }, [tasksByDate]);
 
-  // Generate calendar navigation dates for daily view
-  const calendarDates = useMemo(() => {
-    const dates: Date[] = [];
-    const start = new Date(today);
-    start.setDate(start.getDate() - 3);
-
-    for (let i = 0; i < 14; i++) {
-      const date = new Date(start);
-      date.setDate(date.getDate() + i);
-      dates.push(date);
-    }
-    return dates;
-  }, []);
-
-  // Task count by date for calendar badges
-  const taskCountByDate = useMemo(() => {
-    const counts: Record<string, { pending: number; completed: number }> = {};
-
-    tasks?.forEach((task) => {
-      if (!productionTaskTypes.includes(task.type)) return;
-      if (!task.dueDate) return;
-
-      const dateKey = new Date(task.dueDate).toDateString();
-      if (!counts[dateKey]) {
-        counts[dateKey] = { pending: 0, completed: 0 };
-      }
-
-      if (task.status === 'COMPLETED') {
-        counts[dateKey].completed++;
-      } else {
-        counts[dateKey].pending++;
-      }
-    });
-
-    return counts;
-  }, [tasks]);
 
   const handleOpenLog = (task: Task) => {
     setLoggingTask(task);
@@ -214,6 +149,7 @@ export default function OperationsPage() {
     const completedAt = new Date(`${logForm.completedDate}T${logForm.completedTime}`);
 
     try {
+      // Complete the task
       await completeTask.mutateAsync({
         taskId: loggingTask.id,
         data: {
@@ -225,6 +161,27 @@ export default function OperationsPage() {
           completedAt: completedAt.toISOString(),
         },
       });
+
+      // For MOVE_TO_LIGHT tasks, create rack assignments for each level allocation
+      if (
+        loggingTask.type === 'MOVE_TO_LIGHT' &&
+        logForm.rackDestination?.rackElementId &&
+        logForm.rackDestination?.levelAllocations.length > 0 &&
+        loggingTask.orderItem
+      ) {
+        // Create an assignment for each level allocation
+        for (const allocation of logForm.rackDestination.levelAllocations) {
+          await createRackAssignment.mutateAsync({
+            rackElementId: logForm.rackDestination.rackElementId,
+            level: allocation.level,
+            orderItemId: loggingTask.orderItem.id,
+            trayCount: allocation.trayCount,
+            taskId: loggingTask.id,
+            assignedBy: logForm.completedBy.trim(),
+          });
+        }
+      }
+
       handleCloseLog();
     } catch (err) {
       setLogError(err instanceof Error ? err.message : 'Failed to complete task');
@@ -248,17 +205,6 @@ export default function OperationsPage() {
     });
   };
 
-  const formatDateLabel = (date: Date) => {
-    const isToday = date.getTime() === today.getTime();
-    const tomorrow = new Date(today);
-    tomorrow.setDate(tomorrow.getDate() + 1);
-    const isTomorrow = date.getTime() === tomorrow.getTime();
-
-    if (isToday) return 'Today';
-    if (isTomorrow) return 'Tomorrow';
-
-    return date.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
-  };
 
   const getTaskTypeInfo = (type: string) => {
     const info: Record<string, { label: string; icon: string; color: string; bgColor: string }> = {
@@ -439,12 +385,12 @@ export default function OperationsPage() {
       </div>
 
       {/* View Tabs */}
-      <div className="flex gap-2 border-b">
-        {(['all', 'daily', 'weekly', 'monthly'] as ViewMode[]).map((mode) => (
+      <div className="flex gap-2 border-b overflow-x-auto">
+        {(['calendar', 'seeding', 'transplant', 'harvest', 'all'] as ViewMode[]).map((mode) => (
           <button
             key={mode}
             onClick={() => setViewMode(mode)}
-            className={`px-4 py-2 -mb-px capitalize ${
+            className={`px-4 py-2 -mb-px capitalize whitespace-nowrap ${
               viewMode === mode ? 'border-b-2 border-primary font-medium' : 'text-muted-foreground'
             }`}
           >
@@ -453,98 +399,90 @@ export default function OperationsPage() {
         ))}
       </div>
 
-      {/* Daily View Calendar Navigation */}
-      {viewMode === 'daily' && (
-        <div className="border rounded-lg bg-card p-4">
-          <div className="flex gap-2 overflow-x-auto pb-2">
-            {calendarDates.map((date) => {
-              const dateKey = date.toDateString();
-              const isSelected = date.getTime() === selectedDate.getTime();
-              const isToday = date.getTime() === today.getTime();
-              const counts = taskCountByDate[dateKey];
-              const hasPending = counts?.pending > 0;
-              const hasCompleted = counts?.completed > 0;
-
-              return (
-                <button
-                  key={dateKey}
-                  onClick={() => setSelectedDate(date)}
-                  className={`flex-shrink-0 w-20 p-3 rounded-lg text-center transition-colors ${
-                    isSelected
-                      ? 'bg-primary text-primary-foreground'
-                      : isToday
-                      ? 'bg-primary/10 border-2 border-primary'
-                      : 'bg-muted/50 hover:bg-muted'
-                  }`}
-                >
-                  <div className="text-xs font-medium opacity-70">
-                    {date.toLocaleDateString('en-US', { weekday: 'short' })}
-                  </div>
-                  <div className="text-lg font-bold">{date.getDate()}</div>
-                  <div className="flex justify-center gap-1 mt-1">
-                    {hasPending && (
-                      <span className={`w-2 h-2 rounded-full ${isSelected ? 'bg-primary-foreground' : 'bg-orange-500'}`} />
-                    )}
-                    {hasCompleted && (
-                      <span className={`w-2 h-2 rounded-full ${isSelected ? 'bg-primary-foreground/50' : 'bg-green-500'}`} />
-                    )}
-                  </div>
-                </button>
-              );
-            })}
-          </div>
-        </div>
+      {/* Calendar View */}
+      {viewMode === 'calendar' && (
+        <TaskCalendar
+          tasks={tasks || []}
+          onTaskClick={(task) => {
+            if (task.status !== 'COMPLETED') {
+              handleOpenLog(task);
+            }
+          }}
+          showCompleted={showCompleted}
+        />
       )}
 
-      {/* Tasks List */}
-      {isLoading ? (
-        <div className="text-center py-12 text-muted-foreground">Loading tasks...</div>
-      ) : sortedDateKeys.length === 0 ? (
-        <div className="border rounded-lg p-12 text-center bg-card">
-          <div className="text-4xl mb-4">
-            {viewMode === 'daily' && selectedDate.getTime() === today.getTime() ? '🎉' : '📅'}
+      {/* Seeding View */}
+      {viewMode === 'seeding' && (
+        <SeedingView
+          tasks={tasks || []}
+          onTaskClick={(task) => {
+            if (task.status !== 'COMPLETED') {
+              handleOpenLog(task);
+            }
+          }}
+          showCompleted={showCompleted}
+        />
+      )}
+
+      {/* Transplant View */}
+      {viewMode === 'transplant' && (
+        <TransplantView
+          tasks={tasks || []}
+          onTaskClick={(task) => {
+            if (task.status !== 'COMPLETED') {
+              handleOpenLog(task);
+            }
+          }}
+          showCompleted={showCompleted}
+        />
+      )}
+
+      {/* Harvest View */}
+      {viewMode === 'harvest' && (
+        <HarvestView
+          tasks={tasks || []}
+          onTaskClick={(task) => {
+            if (task.status !== 'COMPLETED') {
+              handleOpenLog(task);
+            }
+          }}
+          showCompleted={showCompleted}
+        />
+      )}
+
+      {/* Tasks List - All Tasks View */}
+      {viewMode === 'all' && (
+        isLoading ? (
+          <div className="text-center py-12 text-muted-foreground">Loading tasks...</div>
+        ) : sortedDateKeys.length === 0 ? (
+          <div className="border rounded-lg p-12 text-center bg-card">
+            <div className="text-4xl mb-4">📅</div>
+            <h3 className="text-lg font-semibold">No tasks found</h3>
+            <p className="text-muted-foreground">
+              No pending tasks. Create orders to generate production tasks.
+            </p>
           </div>
-          <h3 className="text-lg font-semibold">No tasks found</h3>
-          <p className="text-muted-foreground">
-            {viewMode === 'daily'
-              ? 'No tasks scheduled for this day.'
-              : viewMode === 'weekly'
-              ? 'No tasks scheduled for this week.'
-              : viewMode === 'monthly'
-              ? 'No tasks scheduled for this month.'
-              : 'No pending tasks. Create orders to generate production tasks.'}
-          </p>
-        </div>
-      ) : (
-        <div className="space-y-6">
-          {sortedDateKeys.map((dateKey) => (
-            <div key={dateKey}>
-              {/* Date Header - always show for non-daily views, or show for daily if multiple dates somehow */}
-              {viewMode !== 'daily' && (
+        ) : (
+          <div className="space-y-6">
+            {sortedDateKeys.map((dateKey) => (
+              <div key={dateKey}>
+                {/* Date Header */}
                 <div className="flex items-center gap-3 mb-3">
                   <h3 className="text-lg font-semibold">{formatDateHeader(dateKey)}</h3>
                   <span className="text-sm text-muted-foreground">
                     {tasksByDate[dateKey].filter(t => t.status !== 'COMPLETED').length} pending
                   </span>
                 </div>
-              )}
 
-              {viewMode === 'daily' && (
-                <div className="flex items-center justify-between mb-3">
-                  <h2 className="text-xl font-semibold">{formatDateLabel(selectedDate)}</h2>
-                  <span className="text-sm text-muted-foreground">
-                    {tasksByDate[dateKey].filter(t => t.status !== 'COMPLETED').length} pending
-                  </span>
+                {/* Tasks for this date */}
+                <div className="space-y-3">
+                  {tasksByDate[dateKey].map(renderTaskCard)}
                 </div>
-              )}
-
-              {/* Tasks for this date */}
-              <div className="space-y-3">
-                {tasksByDate[dateKey].map(renderTaskCard)}
               </div>
-            </div>
-          ))}
-        </div>
+            ))}
+          </div>
+        )
       )}
 
       {/* Task Completion Log Modal */}
@@ -599,6 +537,30 @@ export default function OperationsPage() {
                   <span className="text-muted-foreground">Expected Trays:</span>
                   <span className="font-medium">{loggingTask.orderItem?.traysNeeded}</span>
                 </div>
+                {loggingTask.type === 'SEED' && (loggingTask.orderItem?.product as { seedWeight?: number; seedUnit?: string })?.seedWeight && (
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Seed Weight per Tray:</span>
+                    <span className="font-medium">
+                      {(loggingTask.orderItem?.product as { seedWeight?: number; seedUnit?: string })?.seedWeight}{' '}
+                      {(loggingTask.orderItem?.product as { seedWeight?: number; seedUnit?: string })?.seedUnit || 'g'}
+                    </span>
+                  </div>
+                )}
+                {loggingTask.type === 'SEED' && (loggingTask.orderItem?.product as { seedWeight?: number })?.seedWeight && loggingTask.orderItem?.traysNeeded && (
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Total Seed Needed:</span>
+                    <span className="font-medium">
+                      {((loggingTask.orderItem?.product as { seedWeight?: number })?.seedWeight || 0) * (loggingTask.orderItem?.traysNeeded || 0)}{' '}
+                      {(loggingTask.orderItem?.product as { seedUnit?: string })?.seedUnit || 'g'}
+                    </span>
+                  </div>
+                )}
+                {(loggingTask.type === 'MOVE_TO_LIGHT' || loggingTask.type === 'HARVESTING') && loggingTask.orderItem?.seedLot && (
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Seed Lot:</span>
+                    <span className="font-medium">{loggingTask.orderItem.seedLot}</span>
+                  </div>
+                )}
                 {loggingTask.type === 'HARVESTING' && (
                   <div className="flex justify-between">
                     <span className="text-muted-foreground">Target Yield:</span>
@@ -620,17 +582,39 @@ export default function OperationsPage() {
                 />
               </div>
 
-              {/* Seed Lot */}
-              <div>
-                <label className="block text-sm font-medium mb-1">Seed Lot</label>
-                <input
-                  type="text"
-                  value={logForm.seedLot}
-                  onChange={(e) => setLogForm({ ...logForm, seedLot: e.target.value })}
-                  className="w-full px-3 py-2 border rounded-md bg-background"
-                  placeholder="e.g., LOT-2025-001 (optional)"
-                />
-              </div>
+              {/* Seed Lot - Only show for SEED tasks */}
+              {loggingTask.type === 'SEED' && (
+                <div>
+                  <label className="block text-sm font-medium mb-1">Seed Lot</label>
+                  <input
+                    type="text"
+                    value={logForm.seedLot}
+                    onChange={(e) => setLogForm({ ...logForm, seedLot: e.target.value })}
+                    className="w-full px-3 py-2 border rounded-md bg-background"
+                    placeholder="e.g., LOT-2025-001 (optional)"
+                  />
+                </div>
+              )}
+
+              {/* Rack Destination (for MOVE_TO_LIGHT tasks) - Optional */}
+              {loggingTask.type === 'MOVE_TO_LIGHT' && currentFarmId && (
+                <div className="p-3 border rounded-md bg-muted/30">
+                  <h4 className="text-sm font-semibold mb-2 flex items-center gap-2">
+                    <span>☀️</span>
+                    Destination Rack
+                    <span className="text-xs font-normal text-muted-foreground">(optional)</span>
+                  </h4>
+                  <p className="text-xs text-muted-foreground mb-3">
+                    Track where these trays are placed. You can add or edit this later from the Farm Layout.
+                  </p>
+                  <RackSelector
+                    farmId={currentFarmId}
+                    value={logForm.rackDestination}
+                    onChange={(value) => setLogForm({ ...logForm, rackDestination: value })}
+                    trayCount={logForm.actualTrays ? parseInt(logForm.actualTrays) : (loggingTask.orderItem?.traysNeeded ?? 0)}
+                  />
+                </div>
+              )}
 
               {/* Date and Time */}
               <div className="grid grid-cols-2 gap-4">
@@ -666,10 +650,10 @@ export default function OperationsPage() {
                 />
               </div>
 
-              {/* Actual Yield (for harvest only) */}
+              {/* Actual Yield (for harvest only) - Required */}
               {loggingTask.type === 'HARVESTING' && (
                 <div>
-                  <label className="block text-sm font-medium mb-1">Actual Yield (oz)</label>
+                  <label className="block text-sm font-medium mb-1">Actual Yield (oz) *</label>
                   <input
                     type="number"
                     step="0.1"
@@ -677,7 +661,7 @@ export default function OperationsPage() {
                     value={logForm.actualYieldOz}
                     onChange={(e) => setLogForm({ ...logForm, actualYieldOz: e.target.value })}
                     className="w-full px-3 py-2 border rounded-md bg-background"
-                    placeholder={loggingTask.orderItem?.quantityOz?.toString() || ''}
+                    required
                   />
                 </div>
               )}
