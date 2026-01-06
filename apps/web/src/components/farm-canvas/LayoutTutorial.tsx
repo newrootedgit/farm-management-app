@@ -11,21 +11,14 @@ const TUTORIAL_STEPS: TutorialStep[] = [
   {
     title: 'Welcome to Farm Layout',
     description:
-      'This is your visual layout editor where you can design your farm by adding zones, walls, equipment, and more. Let\'s take a quick tour!',
+      'This is your visual layout editor where you can design your farm by adding walls, equipment, and more. Let\'s take a quick tour!',
     position: 'center',
   },
   {
     title: 'Selection Tool',
     description:
-      'Use the Select tool (V) to click and select any zone or element. Once selected, you can drag to move it or use the properties panel to edit it.',
+      'Use the Select tool (S) to click and select any element. Once selected, you can drag to move it or use the properties panel to edit it.',
     targetSelector: '[data-tutorial="tool-select"]',
-    position: 'bottom',
-  },
-  {
-    title: 'Draw Zones',
-    description:
-      'Use the Zone tool (Z) to draw rectangular zones on your canvas. Click and drag to create areas like fields, greenhouses, or storage zones.',
-    targetSelector: '[data-tutorial="tool-zone"]',
     position: 'bottom',
   },
   {
@@ -51,7 +44,7 @@ const TUTORIAL_STEPS: TutorialStep[] = [
   {
     title: 'Properties Panel',
     description:
-      'When you select a zone or element, the properties panel on the right shows all its details. You can edit the name, dimensions, color, and more.',
+      'When you select an element, the properties panel on the right shows all its details. You can edit the name, dimensions, color, and more.',
     position: 'left',
   },
   {

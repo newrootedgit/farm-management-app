@@ -13,7 +13,26 @@ import type {
   Sku, CreateSku, UpdateSku,
   Customer, CreateCustomer, UpdateCustomer,
   CustomerTag, CreateCustomerTag, UpdateCustomerTag,
-  ApiResponse, PaginatedResponse
+  RecurringOrderSchedule, CreateRecurringOrderSchedule, UpdateRecurringOrderSchedule,
+  Blend, CreateBlend, UpdateBlend,
+  BlendProductionSchedule,
+  DeliveryRoute, CreateDeliveryRoute, UpdateDeliveryRoute,
+  DeliverySignature, CaptureSignature,
+  FulfillmentStatus, FulfillmentMethod, PaymentType, RouteStatus,
+  DocumentType, GeneratedDocument, GenerateDocument, SendDocumentEmail,
+  ApiResponse, PaginatedResponse,
+  CsaProgram, CreateCsaProgram, UpdateCsaProgram, CsaProgramWithRelations,
+  CsaShareType, CreateCsaShareType, UpdateCsaShareType,
+  CsaMember, EnrollCsaMember, UpdateCsaMember, RecordCsaPayment, CsaMemberWithRelations,
+  SetMemberPreference, CsaMemberPreference,
+  CsaPickupLocation, CreateCsaPickupLocation, UpdateCsaPickupLocation,
+  CsaWeek, UpdateCsaWeek, CsaWeekWithRelations,
+  SetWeekAllocation, CsaMemberSkip, SkipWeek,
+  PackageType, CreatePackageType, UpdatePackageType,
+  SupplyCategory, CreateSupplyCategory, UpdateSupplyCategory,
+  Supply, CreateSupply, UpdateSupply,
+  SupplyPurchase, CreateSupplyPurchase, UpdateSupplyPurchase,
+  SupplyUsage, CreateSupplyUsage, InventoryCheck,
 } from '@farm/shared';
 
 const API_BASE = import.meta.env.VITE_API_URL || '';
@@ -1226,6 +1245,18 @@ export function useDeleteSku(farmId: string, productId: string) {
   });
 }
 
+export function useDeleteSkuDynamic(farmId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ productId, skuId }: { productId: string; skuId: string }) =>
+      fetchApi(`/api/v1/farms/${farmId}/products/${productId}/skus/${skuId}`, { method: 'DELETE' }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['skus', farmId] });
+    },
+  });
+}
+
 export function useUploadSkuImage(farmId: string, productId: string) {
   const queryClient = useQueryClient();
 
@@ -1412,5 +1443,1558 @@ export function useDeleteCustomerTag(farmId: string) {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['customer-tags', farmId] });
     },
+  });
+}
+
+// ============================================================================
+// RECURRING ORDER SCHEDULES
+// ============================================================================
+
+interface RecurringScheduleWithMeta extends RecurringOrderSchedule {
+  nextHarvestDate: Date | null;
+  scheduleDescription: string;
+  items: Array<{
+    id: string;
+    productId: string;
+    quantityOz: number;
+    overagePercent: number;
+    product: {
+      id: string;
+      name: string;
+      avgYieldPerTray: number | null;
+      daysSoaking: number | null;
+      daysGermination: number | null;
+      daysLight: number | null;
+    };
+  }>;
+  customer?: { id: string; name: string } | null;
+  skippedDates: Array<{ id: string; skipDate: Date; reason: string | null }>;
+  _count: { generatedOrders: number };
+}
+
+export function useRecurringSchedules(farmId: string | undefined) {
+  return useQuery({
+    queryKey: ['recurring-schedules', farmId],
+    queryFn: () => fetchApi<RecurringScheduleWithMeta[]>(`/api/v1/farms/${farmId}/recurring-schedules`),
+    enabled: !!farmId,
+  });
+}
+
+export function useRecurringSchedule(farmId: string | undefined, scheduleId: string | undefined) {
+  return useQuery({
+    queryKey: ['recurring-schedules', farmId, scheduleId],
+    queryFn: () => fetchApi<RecurringScheduleWithMeta & { upcomingHarvestDates: Date[] }>(
+      `/api/v1/farms/${farmId}/recurring-schedules/${scheduleId}`
+    ),
+    enabled: !!farmId && !!scheduleId,
+  });
+}
+
+export function useCreateRecurringSchedule(farmId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (data: CreateRecurringOrderSchedule) =>
+      fetchApi<RecurringOrderSchedule>(`/api/v1/farms/${farmId}/recurring-schedules`, {
+        method: 'POST',
+        body: JSON.stringify(data),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['recurring-schedules', farmId] });
+    },
+  });
+}
+
+export function useUpdateRecurringSchedule(farmId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ scheduleId, data }: { scheduleId: string; data: UpdateRecurringOrderSchedule }) =>
+      fetchApi<RecurringOrderSchedule>(`/api/v1/farms/${farmId}/recurring-schedules/${scheduleId}`, {
+        method: 'PATCH',
+        body: JSON.stringify(data),
+      }),
+    onSuccess: (_, { scheduleId }) => {
+      queryClient.invalidateQueries({ queryKey: ['recurring-schedules', farmId] });
+      queryClient.invalidateQueries({ queryKey: ['recurring-schedules', farmId, scheduleId] });
+    },
+  });
+}
+
+export function useDeleteRecurringSchedule(farmId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (scheduleId: string) =>
+      fetchApi(`/api/v1/farms/${farmId}/recurring-schedules/${scheduleId}`, { method: 'DELETE' }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['recurring-schedules', farmId] });
+    },
+  });
+}
+
+export function useAddSkipDate(farmId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ scheduleId, skipDate, reason }: { scheduleId: string; skipDate: Date; reason?: string }) =>
+      fetchApi(`/api/v1/farms/${farmId}/recurring-schedules/${scheduleId}/skip`, {
+        method: 'POST',
+        body: JSON.stringify({ skipDate, reason }),
+      }),
+    onSuccess: (_, { scheduleId }) => {
+      queryClient.invalidateQueries({ queryKey: ['recurring-schedules', farmId] });
+      queryClient.invalidateQueries({ queryKey: ['recurring-schedules', farmId, scheduleId] });
+    },
+  });
+}
+
+export function useRemoveSkipDate(farmId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ scheduleId, skipId }: { scheduleId: string; skipId: string }) =>
+      fetchApi(`/api/v1/farms/${farmId}/recurring-schedules/${scheduleId}/skip/${skipId}`, { method: 'DELETE' }),
+    onSuccess: (_, { scheduleId }) => {
+      queryClient.invalidateQueries({ queryKey: ['recurring-schedules', farmId] });
+      queryClient.invalidateQueries({ queryKey: ['recurring-schedules', farmId, scheduleId] });
+    },
+  });
+}
+
+export function useGenerateRecurringOrder(farmId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ scheduleId, harvestDate }: { scheduleId: string; harvestDate?: string }) =>
+      fetchApi<Order>(`/api/v1/farms/${farmId}/recurring-schedules/${scheduleId}/generate`, {
+        method: 'POST',
+        body: JSON.stringify({ harvestDate }),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['recurring-schedules', farmId] });
+      queryClient.invalidateQueries({ queryKey: ['orders', farmId] });
+    },
+  });
+}
+
+// ============================================================================
+// BLENDS
+// ============================================================================
+
+export interface BlendWithIngredients extends Blend {
+  product: { id: string; name: string; sku: string | null };
+  ingredients: Array<{
+    id: string;
+    blendId: string;
+    productId: string;
+    ratioPercent: number;
+    overrideDaysSoaking: number | null;
+    overrideDaysGermination: number | null;
+    overrideDaysLight: number | null;
+    displayOrder: number;
+    product: {
+      id: string;
+      name: string;
+      avgYieldPerTray: number | null;
+      daysSoaking: number | null;
+      daysGermination: number | null;
+      daysLight: number | null;
+    };
+  }>;
+  maxGrowthDays: number;
+  ingredientSummary: string;
+  ingredientCount: number;
+}
+
+export function useBlends(farmId: string | undefined) {
+  return useQuery({
+    queryKey: ['blends', farmId],
+    queryFn: () => fetchApi<BlendWithIngredients[]>(`/api/v1/farms/${farmId}/blends`),
+    enabled: !!farmId,
+  });
+}
+
+export function useBlend(farmId: string | undefined, blendId: string | undefined) {
+  return useQuery({
+    queryKey: ['blends', farmId, blendId],
+    queryFn: () => fetchApi<BlendWithIngredients>(`/api/v1/farms/${farmId}/blends/${blendId}`),
+    enabled: !!farmId && !!blendId,
+  });
+}
+
+export function useCreateBlend(farmId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (data: CreateBlend) =>
+      fetchApi<Blend>(`/api/v1/farms/${farmId}/blends`, {
+        method: 'POST',
+        body: JSON.stringify(data),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['blends', farmId] });
+      queryClient.invalidateQueries({ queryKey: ['products', farmId] });
+    },
+  });
+}
+
+export function useUpdateBlend(farmId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ blendId, data }: { blendId: string; data: UpdateBlend }) =>
+      fetchApi<Blend>(`/api/v1/farms/${farmId}/blends/${blendId}`, {
+        method: 'PATCH',
+        body: JSON.stringify(data),
+      }),
+    onSuccess: (_, { blendId }) => {
+      queryClient.invalidateQueries({ queryKey: ['blends', farmId] });
+      queryClient.invalidateQueries({ queryKey: ['blends', farmId, blendId] });
+      queryClient.invalidateQueries({ queryKey: ['products', farmId] });
+    },
+  });
+}
+
+export function useDeleteBlend(farmId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (blendId: string) =>
+      fetchApi(`/api/v1/farms/${farmId}/blends/${blendId}`, { method: 'DELETE' }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['blends', farmId] });
+      queryClient.invalidateQueries({ queryKey: ['products', farmId] });
+    },
+  });
+}
+
+export function usePreviewBlendSchedule(farmId: string) {
+  return useMutation({
+    mutationFn: ({
+      blendId,
+      quantityOz,
+      harvestDate,
+      overagePercent,
+    }: {
+      blendId: string;
+      quantityOz: number;
+      harvestDate: string;
+      overagePercent?: number;
+    }) =>
+      fetchApi<BlendProductionSchedule>(
+        `/api/v1/farms/${farmId}/blends/${blendId}/preview-schedule`,
+        {
+          method: 'POST',
+          body: JSON.stringify({ quantityOz, harvestDate, overagePercent }),
+        }
+      ),
+  });
+}
+
+// ============================================================================
+// DELIVERY ROUTES
+// ============================================================================
+
+interface DeliveryRouteWithOrders extends DeliveryRoute {
+  driver?: {
+    id: string;
+    firstName: string;
+    lastName: string;
+    phone?: string | null;
+  } | null;
+  orders: Array<{
+    id: string;
+    orderNumber: string;
+    customerName: string | null;
+    deliveryAddress: string | null;
+    deliveryStopOrder: number | null;
+    deliveryNotes?: string | null;
+    fulfillmentStatus: FulfillmentStatus;
+    paymentType?: PaymentType;
+    totalCents?: number;
+    customer?: {
+      id: string;
+      name: string;
+      phone: string | null;
+    };
+  }>;
+  _count?: {
+    orders: number;
+  };
+}
+
+interface DriverInfo {
+  id: string;
+  firstName: string;
+  lastName: string;
+  phone: string | null;
+  email: string | null;
+}
+
+export function useDeliveryRoutes(farmId: string | undefined, filters?: {
+  date?: string;
+  status?: RouteStatus;
+  driverId?: string;
+}) {
+  const params = new URLSearchParams();
+  if (filters?.date) params.set('date', filters.date);
+  if (filters?.status) params.set('status', filters.status);
+  if (filters?.driverId) params.set('driverId', filters.driverId);
+  const queryString = params.toString();
+
+  return useQuery({
+    queryKey: ['delivery-routes', farmId, filters],
+    queryFn: () =>
+      fetchApi<DeliveryRouteWithOrders[]>(
+        `/api/v1/farms/${farmId}/delivery-routes${queryString ? `?${queryString}` : ''}`
+      ),
+    enabled: !!farmId,
+  });
+}
+
+export function useDeliveryRoute(farmId: string | undefined, routeId: string | undefined) {
+  return useQuery({
+    queryKey: ['delivery-routes', farmId, routeId],
+    queryFn: () =>
+      fetchApi<DeliveryRouteWithOrders>(`/api/v1/farms/${farmId}/delivery-routes/${routeId}`),
+    enabled: !!farmId && !!routeId,
+  });
+}
+
+export function useCreateDeliveryRoute(farmId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (data: CreateDeliveryRoute & { orderIds?: string[] }) =>
+      fetchApi<DeliveryRoute>(`/api/v1/farms/${farmId}/delivery-routes`, {
+        method: 'POST',
+        body: JSON.stringify(data),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['delivery-routes', farmId] });
+      queryClient.invalidateQueries({ queryKey: ['farms', farmId, 'orders'] });
+    },
+  });
+}
+
+export function useUpdateDeliveryRoute(farmId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ routeId, data }: { routeId: string; data: UpdateDeliveryRoute }) =>
+      fetchApi<DeliveryRoute>(`/api/v1/farms/${farmId}/delivery-routes/${routeId}`, {
+        method: 'PATCH',
+        body: JSON.stringify(data),
+      }),
+    onSuccess: (_, { routeId }) => {
+      queryClient.invalidateQueries({ queryKey: ['delivery-routes', farmId] });
+      queryClient.invalidateQueries({ queryKey: ['delivery-routes', farmId, routeId] });
+    },
+  });
+}
+
+export function useDeleteDeliveryRoute(farmId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (routeId: string) =>
+      fetchApi(`/api/v1/farms/${farmId}/delivery-routes/${routeId}`, { method: 'DELETE' }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['delivery-routes', farmId] });
+      queryClient.invalidateQueries({ queryKey: ['farms', farmId, 'orders'] });
+    },
+  });
+}
+
+export function useAddOrderToRoute(farmId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ routeId, orderId, stopOrder }: { routeId: string; orderId: string; stopOrder?: number }) =>
+      fetchApi(`/api/v1/farms/${farmId}/delivery-routes/${routeId}/orders`, {
+        method: 'POST',
+        body: JSON.stringify({ orderId, stopOrder }),
+      }),
+    onSuccess: (_, { routeId }) => {
+      queryClient.invalidateQueries({ queryKey: ['delivery-routes', farmId] });
+      queryClient.invalidateQueries({ queryKey: ['delivery-routes', farmId, routeId] });
+      queryClient.invalidateQueries({ queryKey: ['farms', farmId, 'orders'] });
+      queryClient.invalidateQueries({ queryKey: ['ready-for-delivery', farmId] });
+    },
+  });
+}
+
+export function useRemoveOrderFromRoute(farmId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ routeId, orderId }: { routeId: string; orderId: string }) =>
+      fetchApi(`/api/v1/farms/${farmId}/delivery-routes/${routeId}/orders/${orderId}`, {
+        method: 'DELETE',
+      }),
+    onSuccess: (_, { routeId }) => {
+      queryClient.invalidateQueries({ queryKey: ['delivery-routes', farmId] });
+      queryClient.invalidateQueries({ queryKey: ['delivery-routes', farmId, routeId] });
+      queryClient.invalidateQueries({ queryKey: ['farms', farmId, 'orders'] });
+      queryClient.invalidateQueries({ queryKey: ['ready-for-delivery', farmId] });
+    },
+  });
+}
+
+export function useReorderRouteStops(farmId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ routeId, orderIds }: { routeId: string; orderIds: string[] }) =>
+      fetchApi(`/api/v1/farms/${farmId}/delivery-routes/${routeId}/reorder`, {
+        method: 'PUT',
+        body: JSON.stringify({ orderIds }),
+      }),
+    onSuccess: (_, { routeId }) => {
+      queryClient.invalidateQueries({ queryKey: ['delivery-routes', farmId, routeId] });
+    },
+  });
+}
+
+export function useStartRoute(farmId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (routeId: string) =>
+      fetchApi<DeliveryRoute>(`/api/v1/farms/${farmId}/delivery-routes/${routeId}/start`, {
+        method: 'POST',
+      }),
+    onSuccess: (_, routeId) => {
+      queryClient.invalidateQueries({ queryKey: ['delivery-routes', farmId] });
+      queryClient.invalidateQueries({ queryKey: ['delivery-routes', farmId, routeId] });
+      queryClient.invalidateQueries({ queryKey: ['farms', farmId, 'orders'] });
+    },
+  });
+}
+
+export function useCompleteRoute(farmId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ routeId, actualDuration, actualMiles }: { routeId: string; actualDuration?: number; actualMiles?: number }) =>
+      fetchApi<DeliveryRoute>(`/api/v1/farms/${farmId}/delivery-routes/${routeId}/complete`, {
+        method: 'POST',
+        body: JSON.stringify({ actualDuration, actualMiles }),
+      }),
+    onSuccess: (_, { routeId }) => {
+      queryClient.invalidateQueries({ queryKey: ['delivery-routes', farmId] });
+      queryClient.invalidateQueries({ queryKey: ['delivery-routes', farmId, routeId] });
+    },
+  });
+}
+
+// ============================================================================
+// ORDER FULFILLMENT
+// ============================================================================
+
+export function useUpdateOrderFulfillment(farmId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ orderId, data }: {
+      orderId: string;
+      data: {
+        fulfillmentMethod?: FulfillmentMethod;
+        fulfillmentStatus?: FulfillmentStatus;
+        paymentType?: PaymentType;
+        deliveryDate?: string;
+        deliveryTimeSlot?: string;
+        deliveryAddress?: string;
+        deliveryNotes?: string;
+        distributorName?: string;
+        distributorContact?: string;
+      }
+    }) =>
+      fetchApi(`/api/v1/farms/${farmId}/orders/${orderId}/fulfillment`, {
+        method: 'PATCH',
+        body: JSON.stringify(data),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['farms', farmId, 'orders'] });
+      queryClient.invalidateQueries({ queryKey: ['delivery-routes', farmId] });
+    },
+  });
+}
+
+export function useMarkOrderReady(farmId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (orderId: string) =>
+      fetchApi(`/api/v1/farms/${farmId}/orders/${orderId}/ready`, { method: 'POST' }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['farms', farmId, 'orders'] });
+      queryClient.invalidateQueries({ queryKey: ['ready-for-delivery', farmId] });
+    },
+  });
+}
+
+export function useMarkOrderDelivered(farmId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (orderId: string) =>
+      fetchApi(`/api/v1/farms/${farmId}/orders/${orderId}/deliver`, { method: 'POST' }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['farms', farmId, 'orders'] });
+      queryClient.invalidateQueries({ queryKey: ['delivery-routes', farmId] });
+    },
+  });
+}
+
+export function useMarkOrderPickedUp(farmId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (orderId: string) =>
+      fetchApi(`/api/v1/farms/${farmId}/orders/${orderId}/pickup`, { method: 'POST' }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['farms', farmId, 'orders'] });
+    },
+  });
+}
+
+// ============================================================================
+// DELIVERY SIGNATURES
+// ============================================================================
+
+export function useCaptureSignature(farmId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ orderId, data }: { orderId: string; data: CaptureSignature }) =>
+      fetchApi<DeliverySignature>(`/api/v1/farms/${farmId}/orders/${orderId}/signature`, {
+        method: 'POST',
+        body: JSON.stringify(data),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['farms', farmId, 'orders'] });
+      queryClient.invalidateQueries({ queryKey: ['delivery-routes', farmId] });
+    },
+  });
+}
+
+export function useOrderSignature(farmId: string | undefined, orderId: string | undefined) {
+  return useQuery({
+    queryKey: ['signatures', farmId, orderId],
+    queryFn: () => fetchApi<DeliverySignature | null>(`/api/v1/farms/${farmId}/orders/${orderId}/signature`),
+    enabled: !!farmId && !!orderId,
+  });
+}
+
+// ============================================================================
+// DRIVERS
+// ============================================================================
+
+export function useDrivers(farmId: string | undefined) {
+  return useQuery({
+    queryKey: ['drivers', farmId],
+    queryFn: () => fetchApi<DriverInfo[]>(`/api/v1/farms/${farmId}/drivers`),
+    enabled: !!farmId,
+  });
+}
+
+export function useDriverRoutes(farmId: string | undefined, driverId: string | undefined, date?: string) {
+  const params = new URLSearchParams();
+  if (date) params.set('date', date);
+  const queryString = params.toString();
+
+  return useQuery({
+    queryKey: ['driver-routes', farmId, driverId, date],
+    queryFn: () =>
+      fetchApi<DeliveryRouteWithOrders[]>(
+        `/api/v1/farms/${farmId}/drivers/${driverId}/routes${queryString ? `?${queryString}` : ''}`
+      ),
+    enabled: !!farmId && !!driverId,
+  });
+}
+
+export function useOrdersReadyForDelivery(farmId: string | undefined) {
+  return useQuery({
+    queryKey: ['ready-for-delivery', farmId],
+    queryFn: () =>
+      fetchApi<Array<{
+        id: string;
+        orderNumber: string;
+        customerName: string | null;
+        deliveryAddress: string | null;
+        deliveryDate: string | null;
+        deliveryNotes: string | null;
+        totalCents: number;
+        paymentType: PaymentType;
+        customer: {
+          id: string;
+          name: string;
+          phone: string | null;
+          addressLine1: string | null;
+          city: string | null;
+          state: string | null;
+          postalCode: string | null;
+        } | null;
+      }>>(`/api/v1/farms/${farmId}/orders/ready-for-delivery`),
+    enabled: !!farmId,
+  });
+}
+
+// ============================================================================
+// DOCUMENTS (PDF Generation)
+// ============================================================================
+
+interface GeneratedDocumentWithOrder extends GeneratedDocument {
+  order?: {
+    id: string;
+    orderNumber: string;
+    customerName: string | null;
+  } | null;
+}
+
+export function useOrderDocuments(farmId: string | undefined, orderId: string | undefined) {
+  return useQuery({
+    queryKey: ['documents', farmId, 'order', orderId],
+    queryFn: () =>
+      fetchApi<GeneratedDocument[]>(`/api/v1/farms/${farmId}/orders/${orderId}/documents`),
+    enabled: !!farmId && !!orderId,
+  });
+}
+
+export function useFarmDocuments(farmId: string | undefined, filters?: {
+  type?: DocumentType;
+  startDate?: string;
+  endDate?: string;
+  limit?: number;
+  offset?: number;
+}) {
+  const params = new URLSearchParams();
+  if (filters?.type) params.set('type', filters.type);
+  if (filters?.startDate) params.set('startDate', filters.startDate);
+  if (filters?.endDate) params.set('endDate', filters.endDate);
+  if (filters?.limit) params.set('limit', String(filters.limit));
+  if (filters?.offset) params.set('offset', String(filters.offset));
+  const queryString = params.toString();
+
+  return useQuery({
+    queryKey: ['documents', farmId, filters],
+    queryFn: () =>
+      fetchApi<{
+        data: GeneratedDocumentWithOrder[];
+        meta: { total: number; limit: number; offset: number };
+      }>(`/api/v1/farms/${farmId}/documents${queryString ? `?${queryString}` : ''}`),
+    enabled: !!farmId,
+  });
+}
+
+export function useGenerateDocument(farmId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ orderId, data }: { orderId: string; data: GenerateDocument }) =>
+      fetchApi<GeneratedDocument>(`/api/v1/farms/${farmId}/orders/${orderId}/documents`, {
+        method: 'POST',
+        body: JSON.stringify(data),
+      }),
+    onSuccess: (_, { orderId }) => {
+      queryClient.invalidateQueries({ queryKey: ['documents', farmId] });
+      queryClient.invalidateQueries({ queryKey: ['documents', farmId, 'order', orderId] });
+      queryClient.invalidateQueries({ queryKey: ['farms', farmId, 'orders', orderId] });
+    },
+  });
+}
+
+export function usePreviewDocument(farmId: string) {
+  return useMutation({
+    mutationFn: async ({ orderId, type }: { orderId: string; type: DocumentType }) => {
+      const response = await fetch(
+        `${API_BASE}/api/v1/farms/${farmId}/orders/${orderId}/documents/preview`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ type }),
+        }
+      );
+      if (!response.ok) {
+        throw new Error('Failed to generate preview');
+      }
+      // Return blob for preview
+      return response.blob();
+    },
+  });
+}
+
+export function useDownloadDocument(farmId: string) {
+  return useMutation({
+    mutationFn: async (documentId: string) => {
+      const response = await fetch(
+        `${API_BASE}/api/v1/farms/${farmId}/documents/${documentId}/download`
+      );
+      if (!response.ok) {
+        throw new Error('Failed to download document');
+      }
+      const blob = await response.blob();
+      // Get filename from content-disposition header or use default
+      const contentDisposition = response.headers.get('content-disposition');
+      let filename = 'document.pdf';
+      if (contentDisposition) {
+        const match = contentDisposition.match(/filename="(.+)"/);
+        if (match) {
+          filename = match[1];
+        }
+      }
+      // Create download link
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+      return { success: true };
+    },
+  });
+}
+
+export function useViewDocument(farmId: string) {
+  return useMutation({
+    mutationFn: async (documentId: string) => {
+      // Open document preview in new tab
+      const url = `${API_BASE}/api/v1/farms/${farmId}/documents/${documentId}/preview`;
+      window.open(url, '_blank');
+      return { success: true };
+    },
+  });
+}
+
+export function useSendDocument(farmId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ documentId, data }: { documentId: string; data: SendDocumentEmail }) =>
+      fetchApi<GeneratedDocument>(`/api/v1/farms/${farmId}/documents/${documentId}/send`, {
+        method: 'POST',
+        body: JSON.stringify(data),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['documents', farmId] });
+    },
+  });
+}
+
+export function useDeleteDocument(farmId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (documentId: string) =>
+      fetchApi(`/api/v1/farms/${farmId}/documents/${documentId}`, { method: 'DELETE' }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['documents', farmId] });
+    },
+  });
+}
+
+// ============================================================================
+// CSA PROGRAMS
+// ============================================================================
+
+export function useCsaPrograms(farmId: string | undefined, filters?: { status?: string; includeStats?: boolean }) {
+  const params = new URLSearchParams();
+  if (filters?.status) params.set('status', filters.status);
+  if (filters?.includeStats) params.set('includeStats', 'true');
+  const queryString = params.toString();
+
+  return useQuery({
+    queryKey: ['csa-programs', farmId, filters],
+    queryFn: () =>
+      fetchApi<Array<CsaProgram & { shareTypes: CsaShareType[]; pickupLocations: CsaPickupLocation[]; _count?: { members: number; weeks: number } }>>(
+        `/api/v1/farms/${farmId}/csa/programs${queryString ? `?${queryString}` : ''}`
+      ),
+    enabled: !!farmId,
+  });
+}
+
+export function useCsaProgram(farmId: string | undefined, programId: string | undefined) {
+  return useQuery({
+    queryKey: ['csa-programs', farmId, programId],
+    queryFn: () => fetchApi<CsaProgramWithRelations>(`/api/v1/farms/${farmId}/csa/programs/${programId}`),
+    enabled: !!farmId && !!programId,
+  });
+}
+
+export function useCreateCsaProgram(farmId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (data: CreateCsaProgram) =>
+      fetchApi<CsaProgram>(`/api/v1/farms/${farmId}/csa/programs`, {
+        method: 'POST',
+        body: JSON.stringify(data),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['csa-programs', farmId] });
+    },
+  });
+}
+
+export function useUpdateCsaProgram(farmId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ programId, data }: { programId: string; data: UpdateCsaProgram }) =>
+      fetchApi<CsaProgram>(`/api/v1/farms/${farmId}/csa/programs/${programId}`, {
+        method: 'PATCH',
+        body: JSON.stringify(data),
+      }),
+    onSuccess: (_, { programId }) => {
+      queryClient.invalidateQueries({ queryKey: ['csa-programs', farmId] });
+      queryClient.invalidateQueries({ queryKey: ['csa-programs', farmId, programId] });
+    },
+  });
+}
+
+export function useDeleteCsaProgram(farmId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (programId: string) =>
+      fetchApi(`/api/v1/farms/${farmId}/csa/programs/${programId}`, { method: 'DELETE' }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['csa-programs', farmId] });
+    },
+  });
+}
+
+export function useGenerateCsaWeeks(farmId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (programId: string) =>
+      fetchApi<CsaWeek[]>(`/api/v1/farms/${farmId}/csa/programs/${programId}/generate-weeks`, {
+        method: 'POST',
+      }),
+    onSuccess: (_, programId) => {
+      queryClient.invalidateQueries({ queryKey: ['csa-programs', farmId, programId] });
+      queryClient.invalidateQueries({ queryKey: ['csa-weeks', farmId, programId] });
+    },
+  });
+}
+
+// ============================================================================
+// CSA SHARE TYPES
+// ============================================================================
+
+export function useCreateCsaShareType(farmId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ programId, data }: { programId: string; data: CreateCsaShareType }) =>
+      fetchApi<CsaShareType>(`/api/v1/farms/${farmId}/csa/programs/${programId}/share-types`, {
+        method: 'POST',
+        body: JSON.stringify(data),
+      }),
+    onSuccess: (_, { programId }) => {
+      queryClient.invalidateQueries({ queryKey: ['csa-programs', farmId, programId] });
+    },
+  });
+}
+
+export function useUpdateCsaShareType(farmId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ shareTypeId, data }: { shareTypeId: string; data: UpdateCsaShareType }) =>
+      fetchApi<CsaShareType>(`/api/v1/farms/${farmId}/csa/share-types/${shareTypeId}`, {
+        method: 'PATCH',
+        body: JSON.stringify(data),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['csa-programs', farmId] });
+    },
+  });
+}
+
+export function useDeleteCsaShareType(farmId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (shareTypeId: string) =>
+      fetchApi(`/api/v1/farms/${farmId}/csa/share-types/${shareTypeId}`, { method: 'DELETE' }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['csa-programs', farmId] });
+    },
+  });
+}
+
+// ============================================================================
+// CSA MEMBERS
+// ============================================================================
+
+export function useCsaMembers(farmId: string | undefined, programId: string | undefined, filters?: { status?: string; shareTypeId?: string }) {
+  const params = new URLSearchParams();
+  if (filters?.status) params.set('status', filters.status);
+  if (filters?.shareTypeId) params.set('shareTypeId', filters.shareTypeId);
+  const queryString = params.toString();
+
+  return useQuery({
+    queryKey: ['csa-members', farmId, programId, filters],
+    queryFn: () =>
+      fetchApi<CsaMemberWithRelations[]>(
+        `/api/v1/farms/${farmId}/csa/programs/${programId}/members${queryString ? `?${queryString}` : ''}`
+      ),
+    enabled: !!farmId && !!programId,
+  });
+}
+
+export function useCsaMember(farmId: string | undefined, memberId: string | undefined) {
+  return useQuery({
+    queryKey: ['csa-members', farmId, memberId],
+    queryFn: () => fetchApi<CsaMemberWithRelations>(`/api/v1/farms/${farmId}/csa/members/${memberId}`),
+    enabled: !!farmId && !!memberId,
+  });
+}
+
+export function useEnrollCsaMember(farmId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ programId, data }: { programId: string; data: EnrollCsaMember }) =>
+      fetchApi<CsaMember>(`/api/v1/farms/${farmId}/csa/programs/${programId}/members`, {
+        method: 'POST',
+        body: JSON.stringify(data),
+      }),
+    onSuccess: (_, { programId }) => {
+      queryClient.invalidateQueries({ queryKey: ['csa-members', farmId, programId] });
+      queryClient.invalidateQueries({ queryKey: ['csa-programs', farmId, programId] });
+    },
+  });
+}
+
+export function useUpdateCsaMember(farmId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ memberId, data }: { memberId: string; data: UpdateCsaMember }) =>
+      fetchApi<CsaMember>(`/api/v1/farms/${farmId}/csa/members/${memberId}`, {
+        method: 'PATCH',
+        body: JSON.stringify(data),
+      }),
+    onSuccess: (_, { memberId }) => {
+      queryClient.invalidateQueries({ queryKey: ['csa-members', farmId] });
+      queryClient.invalidateQueries({ queryKey: ['csa-members', farmId, memberId] });
+    },
+  });
+}
+
+export function useRecordCsaPayment(farmId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ memberId, data }: { memberId: string; data: RecordCsaPayment }) =>
+      fetchApi<CsaMember>(`/api/v1/farms/${farmId}/csa/members/${memberId}/payment`, {
+        method: 'POST',
+        body: JSON.stringify(data),
+      }),
+    onSuccess: (_, { memberId }) => {
+      queryClient.invalidateQueries({ queryKey: ['csa-members', farmId] });
+      queryClient.invalidateQueries({ queryKey: ['csa-members', farmId, memberId] });
+    },
+  });
+}
+
+export function useSetMemberPreference(farmId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ memberId, data }: { memberId: string; data: SetMemberPreference }) =>
+      fetchApi<CsaMemberPreference>(`/api/v1/farms/${farmId}/csa/members/${memberId}/preferences`, {
+        method: 'POST',
+        body: JSON.stringify(data),
+      }),
+    onSuccess: (_, { memberId }) => {
+      queryClient.invalidateQueries({ queryKey: ['csa-members', farmId, memberId] });
+    },
+  });
+}
+
+export function useSkipCsaWeek(farmId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ memberId, weekId, data }: { memberId: string; weekId: string; data?: SkipWeek }) =>
+      fetchApi<CsaMemberSkip>(`/api/v1/farms/${farmId}/csa/members/${memberId}/skip/${weekId}`, {
+        method: 'POST',
+        body: JSON.stringify(data || {}),
+      }),
+    onSuccess: (_, { memberId }) => {
+      queryClient.invalidateQueries({ queryKey: ['csa-members', farmId, memberId] });
+      queryClient.invalidateQueries({ queryKey: ['csa-weeks', farmId] });
+    },
+  });
+}
+
+export function useCancelCsaSkip(farmId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ memberId, weekId }: { memberId: string; weekId: string }) =>
+      fetchApi(`/api/v1/farms/${farmId}/csa/members/${memberId}/skip/${weekId}`, { method: 'DELETE' }),
+    onSuccess: (_, { memberId }) => {
+      queryClient.invalidateQueries({ queryKey: ['csa-members', farmId, memberId] });
+      queryClient.invalidateQueries({ queryKey: ['csa-weeks', farmId] });
+    },
+  });
+}
+
+// ============================================================================
+// CSA PICKUP LOCATIONS
+// ============================================================================
+
+export function useCreateCsaPickupLocation(farmId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ programId, data }: { programId: string; data: CreateCsaPickupLocation }) =>
+      fetchApi<CsaPickupLocation>(`/api/v1/farms/${farmId}/csa/programs/${programId}/locations`, {
+        method: 'POST',
+        body: JSON.stringify(data),
+      }),
+    onSuccess: (_, { programId }) => {
+      queryClient.invalidateQueries({ queryKey: ['csa-programs', farmId, programId] });
+    },
+  });
+}
+
+export function useUpdateCsaPickupLocation(farmId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ locationId, data }: { locationId: string; data: UpdateCsaPickupLocation }) =>
+      fetchApi<CsaPickupLocation>(`/api/v1/farms/${farmId}/csa/locations/${locationId}`, {
+        method: 'PATCH',
+        body: JSON.stringify(data),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['csa-programs', farmId] });
+    },
+  });
+}
+
+export function useDeleteCsaPickupLocation(farmId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (locationId: string) =>
+      fetchApi(`/api/v1/farms/${farmId}/csa/locations/${locationId}`, { method: 'DELETE' }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['csa-programs', farmId] });
+    },
+  });
+}
+
+// ============================================================================
+// CSA WEEKS
+// ============================================================================
+
+export function useCsaWeeks(farmId: string | undefined, programId: string | undefined, filters?: { status?: string }) {
+  const params = new URLSearchParams();
+  if (filters?.status) params.set('status', filters.status);
+  const queryString = params.toString();
+
+  return useQuery({
+    queryKey: ['csa-weeks', farmId, programId, filters],
+    queryFn: () =>
+      fetchApi<Array<CsaWeek & { _count: { allocations: number; skipRequests: number } }>>(
+        `/api/v1/farms/${farmId}/csa/programs/${programId}/weeks${queryString ? `?${queryString}` : ''}`
+      ),
+    enabled: !!farmId && !!programId,
+  });
+}
+
+export function useCsaWeek(farmId: string | undefined, weekId: string | undefined) {
+  return useQuery({
+    queryKey: ['csa-weeks', farmId, weekId],
+    queryFn: () => fetchApi<CsaWeekWithRelations>(`/api/v1/farms/${farmId}/csa/weeks/${weekId}`),
+    enabled: !!farmId && !!weekId,
+  });
+}
+
+export function useUpdateCsaWeek(farmId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ weekId, data }: { weekId: string; data: UpdateCsaWeek }) =>
+      fetchApi<CsaWeek>(`/api/v1/farms/${farmId}/csa/weeks/${weekId}`, {
+        method: 'PATCH',
+        body: JSON.stringify(data),
+      }),
+    onSuccess: (_, { weekId }) => {
+      queryClient.invalidateQueries({ queryKey: ['csa-weeks', farmId] });
+      queryClient.invalidateQueries({ queryKey: ['csa-weeks', farmId, weekId] });
+    },
+  });
+}
+
+export function useSetCsaWeekAllocations(farmId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ weekId, allocations }: { weekId: string; allocations: SetWeekAllocation[] }) =>
+      fetchApi<CsaWeekWithRelations>(`/api/v1/farms/${farmId}/csa/weeks/${weekId}/allocations`, {
+        method: 'POST',
+        body: JSON.stringify({ allocations }),
+      }),
+    onSuccess: (_, { weekId }) => {
+      queryClient.invalidateQueries({ queryKey: ['csa-weeks', farmId, weekId] });
+    },
+  });
+}
+
+export function useFinalizeCsaWeek(farmId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (weekId: string) =>
+      fetchApi<CsaWeek>(`/api/v1/farms/${farmId}/csa/weeks/${weekId}/finalize`, {
+        method: 'POST',
+      }),
+    onSuccess: (_, weekId) => {
+      queryClient.invalidateQueries({ queryKey: ['csa-weeks', farmId] });
+      queryClient.invalidateQueries({ queryKey: ['csa-weeks', farmId, weekId] });
+    },
+  });
+}
+
+export function useGenerateCsaOrders(farmId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (weekId: string) =>
+      fetchApi<{ ordersCreated: number; orders: Order[] }>(
+        `/api/v1/farms/${farmId}/csa/weeks/${weekId}/generate-orders`,
+        { method: 'POST' }
+      ),
+    onSuccess: (_, weekId) => {
+      queryClient.invalidateQueries({ queryKey: ['csa-weeks', farmId] });
+      queryClient.invalidateQueries({ queryKey: ['csa-weeks', farmId, weekId] });
+      queryClient.invalidateQueries({ queryKey: ['farms', farmId, 'orders'] });
+    },
+  });
+}
+
+// ============================================================================
+// PACKAGE TYPES
+// ============================================================================
+
+export function usePackageTypes(farmId: string | undefined) {
+  return useQuery({
+    queryKey: ['package-types', farmId],
+    queryFn: () => fetchApi<PackageType[]>(`/api/v1/farms/${farmId}/package-types`),
+    enabled: !!farmId,
+  });
+}
+
+export function useCreatePackageType(farmId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (data: CreatePackageType) =>
+      fetchApi<PackageType>(`/api/v1/farms/${farmId}/package-types`, {
+        method: 'POST',
+        body: JSON.stringify(data),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['package-types', farmId] });
+    },
+  });
+}
+
+export function useUpdatePackageType(farmId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ id, data }: { id: string; data: UpdatePackageType }) =>
+      fetchApi<PackageType>(`/api/v1/farms/${farmId}/package-types/${id}`, {
+        method: 'PATCH',
+        body: JSON.stringify(data),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['package-types', farmId] });
+    },
+  });
+}
+
+export function useDeletePackageType(farmId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (id: string) =>
+      fetchApi<{ success: boolean }>(`/api/v1/farms/${farmId}/package-types/${id}`, {
+        method: 'DELETE',
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['package-types', farmId] });
+    },
+  });
+}
+
+export function useSeedDefaultPackageTypes(farmId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: () =>
+      fetchApi<{ created: PackageType[]; message: string }>(
+        `/api/v1/farms/${farmId}/package-types/seed-defaults`,
+        { method: 'POST' }
+      ),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['package-types', farmId] });
+    },
+  });
+}
+
+// ============================================================================
+// SUPPLIES INVENTORY
+// ============================================================================
+
+// Extended interfaces for API responses
+export interface SupplyCategoryWithCount extends SupplyCategory {
+  _count: { supplies: number };
+}
+
+export interface SupplyWithRelations extends Supply {
+  category: SupplyCategory;
+  product?: { id: string; name: string } | null;
+  _count?: { purchases: number; usageLogs: number };
+}
+
+export interface SupplyPurchaseLot {
+  id: string;
+  lotNumber: string | null;
+  quantity: number;
+  purchaseDate: string;
+  expiryDate: string | null;
+  supplier: string | null;
+}
+
+// Supply Categories
+export function useSupplyCategories(farmId: string | null) {
+  return useQuery({
+    queryKey: ['supply-categories', farmId],
+    queryFn: () => fetchApi<SupplyCategoryWithCount[]>(`/api/v1/farms/${farmId}/supply-categories`),
+    enabled: !!farmId,
+  });
+}
+
+export function useCreateSupplyCategory(farmId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (data: CreateSupplyCategory) =>
+      fetchApi<SupplyCategory>(`/api/v1/farms/${farmId}/supply-categories`, {
+        method: 'POST',
+        body: JSON.stringify(data),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['supply-categories', farmId] });
+    },
+  });
+}
+
+export function useUpdateSupplyCategory(farmId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ id, data }: { id: string; data: UpdateSupplyCategory }) =>
+      fetchApi<SupplyCategory>(`/api/v1/farms/${farmId}/supply-categories/${id}`, {
+        method: 'PATCH',
+        body: JSON.stringify(data),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['supply-categories', farmId] });
+    },
+  });
+}
+
+export function useDeleteSupplyCategory(farmId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (id: string) =>
+      fetchApi<{ success: boolean }>(`/api/v1/farms/${farmId}/supply-categories/${id}`, {
+        method: 'DELETE',
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['supply-categories', farmId] });
+    },
+  });
+}
+
+export function useSeedDefaultSupplyCategories(farmId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: () =>
+      fetchApi<{ created: SupplyCategory[]; message: string }>(
+        `/api/v1/farms/${farmId}/supply-categories/seed-defaults`,
+        { method: 'POST' }
+      ),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['supply-categories', farmId] });
+    },
+  });
+}
+
+// Supplies
+export function useSupplies(farmId: string | null, categoryId?: string) {
+  const params = categoryId ? `?categoryId=${categoryId}` : '';
+  return useQuery({
+    queryKey: ['supplies', farmId, categoryId],
+    queryFn: () => fetchApi<SupplyWithRelations[]>(`/api/v1/farms/${farmId}/supplies${params}`),
+    enabled: !!farmId,
+  });
+}
+
+export function useSupply(farmId: string | null, supplyId: string | undefined) {
+  return useQuery({
+    queryKey: ['supplies', farmId, supplyId],
+    queryFn: () => fetchApi<SupplyWithRelations>(`/api/v1/farms/${farmId}/supplies/${supplyId}`),
+    enabled: !!farmId && !!supplyId,
+  });
+}
+
+export function useLowStockSupplies(farmId: string | null) {
+  return useQuery({
+    queryKey: ['supplies', farmId, 'low-stock'],
+    queryFn: () => fetchApi<SupplyWithRelations[]>(`/api/v1/farms/${farmId}/supplies/low-stock`),
+    enabled: !!farmId,
+  });
+}
+
+export function useCreateSupply(farmId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (data: CreateSupply) =>
+      fetchApi<SupplyWithRelations>(`/api/v1/farms/${farmId}/supplies`, {
+        method: 'POST',
+        body: JSON.stringify(data),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['supplies', farmId] });
+    },
+  });
+}
+
+export function useUpdateSupply(farmId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ id, data }: { id: string; data: UpdateSupply }) =>
+      fetchApi<SupplyWithRelations>(`/api/v1/farms/${farmId}/supplies/${id}`, {
+        method: 'PATCH',
+        body: JSON.stringify(data),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['supplies', farmId] });
+    },
+  });
+}
+
+export function useDeleteSupply(farmId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (id: string) =>
+      fetchApi<{ success: boolean }>(`/api/v1/farms/${farmId}/supplies/${id}`, {
+        method: 'DELETE',
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['supplies', farmId] });
+    },
+  });
+}
+
+// Supply Purchases
+export type SupplyPurchaseWithSupply = SupplyPurchase & {
+  supply: {
+    id: string;
+    name: string;
+    category: { id: string; name: string };
+  };
+};
+
+// Get ALL purchases for a farm (with optional filters)
+export function useAllSupplyPurchases(
+  farmId: string | null,
+  filters?: { supplyId?: string; categoryId?: string; supplier?: string }
+) {
+  const params = new URLSearchParams();
+  if (filters?.supplyId) params.set('supplyId', filters.supplyId);
+  if (filters?.categoryId) params.set('categoryId', filters.categoryId);
+  if (filters?.supplier) params.set('supplier', filters.supplier);
+  const queryString = params.toString();
+
+  return useQuery({
+    queryKey: ['all-purchases', farmId, filters],
+    queryFn: () =>
+      fetchApi<SupplyPurchaseWithSupply[]>(
+        `/api/v1/farms/${farmId}/purchases${queryString ? `?${queryString}` : ''}`
+      ),
+    enabled: !!farmId,
+  });
+}
+
+// Get purchases for a specific supply
+export function useSupplyPurchases(farmId: string | null, supplyId: string | undefined) {
+  return useQuery({
+    queryKey: ['supply-purchases', farmId, supplyId],
+    queryFn: () => fetchApi<SupplyPurchase[]>(`/api/v1/farms/${farmId}/supplies/${supplyId}/purchases`),
+    enabled: !!farmId && !!supplyId,
+  });
+}
+
+export function useCreateSupplyPurchase(farmId: string, supplyId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (data: CreateSupplyPurchase) =>
+      fetchApi<SupplyPurchase>(`/api/v1/farms/${farmId}/supplies/${supplyId}/purchases`, {
+        method: 'POST',
+        body: JSON.stringify(data),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['supply-purchases', farmId, supplyId] });
+      queryClient.invalidateQueries({ queryKey: ['all-purchases', farmId] });
+      queryClient.invalidateQueries({ queryKey: ['supplies', farmId] });
+    },
+  });
+}
+
+export function useUpdateSupplyPurchase(farmId: string, supplyId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ id, data }: { id: string; data: UpdateSupplyPurchase }) =>
+      fetchApi<SupplyPurchase>(`/api/v1/farms/${farmId}/supplies/${supplyId}/purchases/${id}`, {
+        method: 'PATCH',
+        body: JSON.stringify(data),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['supply-purchases', farmId, supplyId] });
+      queryClient.invalidateQueries({ queryKey: ['supplies', farmId] });
+    },
+  });
+}
+
+export function useDeleteSupplyPurchase(farmId: string, supplyId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (id: string) =>
+      fetchApi<{ success: boolean }>(`/api/v1/farms/${farmId}/supplies/${supplyId}/purchases/${id}`, {
+        method: 'DELETE',
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['supply-purchases', farmId, supplyId] });
+      queryClient.invalidateQueries({ queryKey: ['all-purchases', farmId] });
+      queryClient.invalidateQueries({ queryKey: ['supplies', farmId] });
+    },
+  });
+}
+
+// Supply Usage
+export function useSupplyUsage(farmId: string | null, supplyId: string | undefined) {
+  return useQuery({
+    queryKey: ['supply-usage', farmId, supplyId],
+    queryFn: () => fetchApi<SupplyUsage[]>(`/api/v1/farms/${farmId}/supplies/${supplyId}/usage`),
+    enabled: !!farmId && !!supplyId,
+  });
+}
+
+export function useCreateSupplyUsage(farmId: string, supplyId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (data: CreateSupplyUsage) =>
+      fetchApi<SupplyUsage>(`/api/v1/farms/${farmId}/supplies/${supplyId}/usage`, {
+        method: 'POST',
+        body: JSON.stringify(data),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['supply-usage', farmId, supplyId] });
+      queryClient.invalidateQueries({ queryKey: ['supplies', farmId] });
+    },
+  });
+}
+
+// Inventory Check
+export interface InventoryCheckResponse {
+  supply: SupplyWithRelations;
+  adjustment: {
+    previousStock: number;
+    newStock: number;
+    difference: number;
+  };
+  usageRecord: SupplyUsage;
+}
+
+export function useInventoryCheck(farmId: string, supplyId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (data: InventoryCheck) =>
+      fetchApi<InventoryCheckResponse>(`/api/v1/farms/${farmId}/supplies/${supplyId}/inventory-check`, {
+        method: 'POST',
+        body: JSON.stringify(data),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['supplies', farmId] });
+      queryClient.invalidateQueries({ queryKey: ['supply-usage', farmId, supplyId] });
+      queryClient.invalidateQueries({ queryKey: ['all-purchases', farmId] });
+    },
+  });
+}
+
+// Recalculate inventory for all supplies (fixes stock levels based on actual records)
+interface RecalculateInventoryResult {
+  id: string;
+  name: string;
+  previousStock: number;
+  newStock: number;
+  totalPurchased: number;
+  totalUsed: number;
+  unit: string | null;
+}
+
+interface RecalculateInventoryResponse {
+  message: string;
+  results: RecalculateInventoryResult[];
+}
+
+export function useRecalculateInventory(farmId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: () =>
+      fetchApi<RecalculateInventoryResponse>(`/api/v1/farms/${farmId}/supplies/recalculate-inventory`, {
+        method: 'POST',
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['supplies', farmId] });
+      queryClient.invalidateQueries({ queryKey: ['all-purchases', farmId] });
+    },
+  });
+}
+
+// Supply Lot Numbers
+export function useSupplyLots(farmId: string | null, supplyId: string | undefined) {
+  return useQuery({
+    queryKey: ['supply-lots', farmId, supplyId],
+    queryFn: () => fetchApi<SupplyPurchaseLot[]>(`/api/v1/farms/${farmId}/supplies/${supplyId}/lots`),
+    enabled: !!farmId && !!supplyId,
   });
 }

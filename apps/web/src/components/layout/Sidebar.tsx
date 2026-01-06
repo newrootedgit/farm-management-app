@@ -30,12 +30,13 @@ const navigation: NavItem[] = [
   { name: 'Dashboard', href: '/', icon: HomeIcon },
   { name: 'Operations', href: '/operations', icon: ClipboardIcon },
   { name: 'Planning', href: '/planning', icon: CalendarIcon, minRole: 'FARM_MANAGER' },
-  { name: 'Crop Varieties', href: '/inventory', icon: PackageIcon, minRole: 'FARM_MANAGER' },
+  { name: 'Varieties & Mixes', href: '/inventory', icon: PackageIcon, minRole: 'FARM_MANAGER' },
+  { name: 'Supplies & Inventory', href: '/supplies', icon: BoxIcon, minRole: 'FARM_MANAGER' },
   { name: 'Customers', href: '/customers', icon: CustomerIcon, minRole: 'SALESPERSON' },
   { name: 'Store', href: '/store', icon: StoreIcon, minRole: 'ADMIN' },
+  { name: 'Delivery', href: '/delivery', icon: TruckIcon, minRole: 'FARM_MANAGER' },
   { name: 'Farm Layout', href: '/layout', icon: MapIcon, minRole: 'ADMIN' },
-  { name: 'Zones', href: '/zones', icon: GridIcon, minRole: 'FARM_MANAGER' },
-  { name: 'Employees', href: '/employees', icon: UsersIcon, minRole: 'ADMIN' },
+  { name: 'Team', href: '/team', icon: UsersIcon, minRole: 'ADMIN' },
   { name: 'Financials', href: '/financials', icon: DollarIcon, minRole: 'ADMIN' },
   { name: 'Wiki', href: '/wiki', icon: BookIcon },
   { name: 'Settings', href: '/settings', icon: SettingsIcon },
@@ -91,8 +92,12 @@ export function Sidebar() {
   return (
     <aside className="fixed inset-y-0 left-0 z-50 w-64 bg-card border-r flex flex-col">
       {/* Logo */}
-      <div className="h-16 flex items-center px-6 border-b">
-        <span className="text-xl font-bold text-primary">Rooted Planner</span>
+      <div className="h-16 flex items-center px-4 border-b">
+        <img
+          src="/rooted-robotics-logo.png"
+          alt="Rooted Planner"
+          className="h-10 w-auto"
+        />
       </div>
 
       {/* Farm Selector */}
@@ -202,14 +207,6 @@ function MapIcon({ className }: { className?: string }) {
   );
 }
 
-function GridIcon({ className }: { className?: string }) {
-  return (
-    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor">
-      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z" />
-    </svg>
-  );
-}
-
 function PackageIcon({ className }: { className?: string }) {
   return (
     <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -279,6 +276,22 @@ function StoreIcon({ className }: { className?: string }) {
   return (
     <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor">
       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 11-4 0 2 2 0 014 0z" />
+    </svg>
+  );
+}
+
+function TruckIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16V6a1 1 0 00-1-1H4a1 1 0 00-1 1v10a1 1 0 001 1h1m8-1a1 1 0 01-1 1H9m4-1V8a1 1 0 011-1h2.586a1 1 0 01.707.293l3.414 3.414a1 1 0 01.293.707V16a1 1 0 01-1 1h-1m-6-1a1 1 0 001 1h1M5 17a2 2 0 104 0m-4 0a2 2 0 114 0m6 0a2 2 0 104 0m-4 0a2 2 0 114 0" />
+    </svg>
+  );
+}
+
+function BoxIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4" />
     </svg>
   );
 }

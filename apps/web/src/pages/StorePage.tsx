@@ -1,16 +1,23 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useFarmStore } from '@/stores/farm-store';
-import { useFarm, useSkus, useOrders, useUpdateSkuDynamic } from '@/lib/api-client';
+import { useFarm, useSkus, useOrders, useUpdateSkuDynamic, usePackageTypes } from '@/lib/api-client';
 import { LogoUpload } from '@/components/LogoUpload';
+import { ChevronUpIcon, ChevronDownIcon, FunnelIcon, XMarkIcon } from '@heroicons/react/24/outline';
 
 const API_BASE = 'http://localhost:3000';
+
+type SkuSalesChannel = 'WHOLESALE' | 'RETAIL' | 'BOTH';
+type SortField = 'product' | 'name' | 'weight' | 'package' | 'price' | 'channel' | 'available';
+type SortDirection = 'asc' | 'desc';
 
 interface SkuFormData {
   name: string;
   skuCode: string;
   weightOz: number;
   price: number;
+  salesChannel: SkuSalesChannel;
+  packageTypeId: string | null;
 }
 
 export default function StorePage() {
@@ -19,6 +26,7 @@ export default function StorePage() {
   const { data: farm } = useFarm(currentFarmId ?? undefined);
   const { data: skus, isLoading: skusLoading } = useSkus(currentFarmId ?? undefined);
   const { data: orders, isLoading: ordersLoading } = useOrders(currentFarmId ?? undefined);
+  const { data: packageTypes } = usePackageTypes(currentFarmId ?? undefined);
   const updateSku = useUpdateSkuDynamic(currentFarmId ?? '');
 
   const [activeTab, setActiveTab] = useState<'skus' | 'orders' | 'share'>('skus');
@@ -35,8 +43,96 @@ export default function StorePage() {
     skuCode: '',
     weightOz: 0,
     price: 0,
+    salesChannel: 'BOTH',
+    packageTypeId: null,
   });
   const [saving, setSaving] = useState(false);
+
+  // Sorting and filtering state
+  const [sortField, setSortField] = useState<SortField>('product');
+  const [sortDirection, setSortDirection] = useState<SortDirection>('asc');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [channelFilter, setChannelFilter] = useState<SkuSalesChannel | 'ALL'>('ALL');
+  const [availabilityFilter, setAvailabilityFilter] = useState<'ALL' | 'AVAILABLE' | 'UNAVAILABLE'>('ALL');
+  const [showFilters, setShowFilters] = useState(false);
+
+  // Filter and sort SKUs
+  const filteredAndSortedSkus = useMemo(() => {
+    if (!skus) return [];
+
+    let result = [...skus];
+
+    // Apply search filter
+    if (searchQuery.trim()) {
+      const query = searchQuery.toLowerCase();
+      result = result.filter(
+        (sku) =>
+          sku.name.toLowerCase().includes(query) ||
+          sku.skuCode.toLowerCase().includes(query) ||
+          sku.product?.name?.toLowerCase().includes(query)
+      );
+    }
+
+    // Apply channel filter
+    if (channelFilter !== 'ALL') {
+      result = result.filter((sku) => sku.salesChannel === channelFilter);
+    }
+
+    // Apply availability filter
+    if (availabilityFilter === 'AVAILABLE') {
+      result = result.filter((sku) => sku.isAvailable);
+    } else if (availabilityFilter === 'UNAVAILABLE') {
+      result = result.filter((sku) => !sku.isAvailable);
+    }
+
+    // Apply sorting
+    result.sort((a, b) => {
+      let comparison = 0;
+      switch (sortField) {
+        case 'product':
+          comparison = (a.product?.name || '').localeCompare(b.product?.name || '');
+          break;
+        case 'name':
+          comparison = a.name.localeCompare(b.name);
+          break;
+        case 'weight':
+          comparison = a.weightOz - b.weightOz;
+          break;
+        case 'package':
+          comparison = (a.packageTypeId || '').localeCompare(b.packageTypeId || '');
+          break;
+        case 'price':
+          comparison = a.price - b.price;
+          break;
+        case 'channel':
+          comparison = (a.salesChannel || '').localeCompare(b.salesChannel || '');
+          break;
+        case 'available':
+          comparison = (a.isAvailable ? 1 : 0) - (b.isAvailable ? 1 : 0);
+          break;
+      }
+      return sortDirection === 'asc' ? comparison : -comparison;
+    });
+
+    return result;
+  }, [skus, searchQuery, channelFilter, availabilityFilter, sortField, sortDirection]);
+
+  const handleSort = (field: SortField) => {
+    if (sortField === field) {
+      setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc');
+    } else {
+      setSortField(field);
+      setSortDirection('asc');
+    }
+  };
+
+  const clearFilters = () => {
+    setSearchQuery('');
+    setChannelFilter('ALL');
+    setAvailabilityFilter('ALL');
+  };
+
+  const hasActiveFilters = searchQuery.trim() || channelFilter !== 'ALL' || availabilityFilter !== 'ALL';
 
   if (!currentFarmId) {
     return (
@@ -49,8 +145,8 @@ export default function StorePage() {
     );
   }
 
-  // Filter orders from storefront
-  const storefrontOrders = orders?.filter(o => o.orderSource === 'STOREFRONT') ?? [];
+  // All orders (storefront filtering can be added when orderSource field is implemented)
+  const storefrontOrders = orders ?? [];
 
   // Generate storefront URL
   const storefrontUrl = farm?.slug
@@ -69,18 +165,6 @@ export default function StorePage() {
         productId,
         skuId,
         data: { isAvailable: !currentValue },
-      });
-    } catch (error) {
-      console.error('Failed to update SKU:', error);
-    }
-  };
-
-  const handleTogglePublic = async (skuId: string, productId: string, currentValue: boolean) => {
-    try {
-      await updateSku.mutateAsync({
-        productId,
-        skuId,
-        data: { isPublic: !currentValue },
       });
     } catch (error) {
       console.error('Failed to update SKU:', error);
@@ -126,7 +210,7 @@ export default function StorePage() {
     });
   };
 
-  const handleOpenEdit = (sku: typeof skus[0]) => {
+  const handleOpenEdit = (sku: NonNullable<typeof skus>[number]) => {
     setEditingSku({
       id: sku.id,
       productId: sku.productId,
@@ -138,6 +222,8 @@ export default function StorePage() {
       skuCode: sku.skuCode,
       weightOz: sku.weightOz,
       price: sku.price / 100, // Convert cents to dollars for display
+      salesChannel: (sku.salesChannel as SkuSalesChannel) ?? 'BOTH',
+      packageTypeId: sku.packageTypeId ?? null,
     });
   };
 
@@ -219,6 +305,8 @@ export default function StorePage() {
           skuCode: editForm.skuCode,
           weightOz: editForm.weightOz,
           price: Math.round(editForm.price * 100), // Convert dollars to cents
+          salesChannel: editForm.salesChannel,
+          packageTypeId: editForm.packageTypeId ?? undefined,
         },
       });
       setEditingSku(null);
@@ -260,6 +348,80 @@ export default function StorePage() {
       {/* SKU Management Tab */}
       {activeTab === 'skus' && (
         <div className="space-y-4">
+          {/* Search and Filter Controls */}
+          <div className="flex flex-col sm:flex-row gap-3">
+            <div className="flex-1">
+              <input
+                type="text"
+                placeholder="Search SKUs by name, code, or product..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+              />
+            </div>
+            <button
+              onClick={() => setShowFilters(!showFilters)}
+              className={`flex items-center gap-2 px-4 py-2 border rounded-md hover:bg-muted/50 ${
+                hasActiveFilters ? 'border-primary text-primary' : ''
+              }`}
+            >
+              <FunnelIcon className="h-4 w-4" />
+              Filters
+              {hasActiveFilters && (
+                <span className="bg-primary text-primary-foreground text-xs px-1.5 py-0.5 rounded-full">
+                  {(channelFilter !== 'ALL' ? 1 : 0) + (availabilityFilter !== 'ALL' ? 1 : 0)}
+                </span>
+              )}
+            </button>
+          </div>
+
+          {/* Filter Panel */}
+          {showFilters && (
+            <div className="flex flex-wrap items-center gap-4 p-4 bg-muted/30 rounded-lg border">
+              <div className="flex items-center gap-2">
+                <label className="text-sm font-medium">Channel:</label>
+                <select
+                  value={channelFilter}
+                  onChange={(e) => setChannelFilter(e.target.value as SkuSalesChannel | 'ALL')}
+                  className="px-3 py-1.5 border rounded-md text-sm"
+                >
+                  <option value="ALL">All Channels</option>
+                  <option value="WHOLESALE">Wholesale</option>
+                  <option value="RETAIL">Retail</option>
+                  <option value="BOTH">Both</option>
+                </select>
+              </div>
+              <div className="flex items-center gap-2">
+                <label className="text-sm font-medium">Availability:</label>
+                <select
+                  value={availabilityFilter}
+                  onChange={(e) => setAvailabilityFilter(e.target.value as 'ALL' | 'AVAILABLE' | 'UNAVAILABLE')}
+                  className="px-3 py-1.5 border rounded-md text-sm"
+                >
+                  <option value="ALL">All</option>
+                  <option value="AVAILABLE">Available</option>
+                  <option value="UNAVAILABLE">Unavailable</option>
+                </select>
+              </div>
+              {hasActiveFilters && (
+                <button
+                  onClick={clearFilters}
+                  className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
+                >
+                  <XMarkIcon className="h-4 w-4" />
+                  Clear filters
+                </button>
+              )}
+            </div>
+          )}
+
+          {/* Results count */}
+          {skus && skus.length > 0 && (
+            <div className="text-sm text-muted-foreground">
+              Showing {filteredAndSortedSkus.length} of {skus.length} SKUs
+            </div>
+          )}
+
           {skusLoading ? (
             <div className="flex items-center justify-center h-32">
               <div className="text-muted-foreground">Loading SKUs...</div>
@@ -272,22 +434,97 @@ export default function StorePage() {
                 Add SKUs to your products from the Varieties page to manage them here.
               </p>
             </div>
+          ) : filteredAndSortedSkus.length === 0 ? (
+            <div className="border rounded-lg p-12 text-center">
+              <div className="text-4xl mb-4">🔍</div>
+              <h3 className="text-lg font-semibold">No Results</h3>
+              <p className="text-muted-foreground">
+                No SKUs match your search or filters.
+              </p>
+              <button
+                onClick={clearFilters}
+                className="mt-4 text-sm text-primary hover:underline"
+              >
+                Clear all filters
+              </button>
+            </div>
           ) : (
             <div className="border rounded-lg overflow-hidden">
               <table className="w-full">
                 <thead className="bg-muted/50">
                   <tr>
                     <th className="text-left px-4 py-3 font-medium w-16">Image</th>
-                    <th className="text-left px-4 py-3 font-medium">Product / SKU</th>
-                    <th className="text-left px-4 py-3 font-medium">Weight</th>
-                    <th className="text-left px-4 py-3 font-medium">Price</th>
-                    <th className="text-center px-4 py-3 font-medium">Available</th>
-                    <th className="text-center px-4 py-3 font-medium">Public</th>
+                    <th
+                      className="text-left px-4 py-3 font-medium cursor-pointer hover:bg-muted/70 select-none"
+                      onClick={() => handleSort('product')}
+                    >
+                      <div className="flex items-center gap-1">
+                        Product / SKU
+                        {sortField === 'product' && (
+                          sortDirection === 'asc' ? <ChevronUpIcon className="h-4 w-4" /> : <ChevronDownIcon className="h-4 w-4" />
+                        )}
+                      </div>
+                    </th>
+                    <th
+                      className="text-left px-4 py-3 font-medium cursor-pointer hover:bg-muted/70 select-none"
+                      onClick={() => handleSort('weight')}
+                    >
+                      <div className="flex items-center gap-1">
+                        Weight
+                        {sortField === 'weight' && (
+                          sortDirection === 'asc' ? <ChevronUpIcon className="h-4 w-4" /> : <ChevronDownIcon className="h-4 w-4" />
+                        )}
+                      </div>
+                    </th>
+                    <th
+                      className="text-center px-4 py-3 font-medium cursor-pointer hover:bg-muted/70 select-none"
+                      onClick={() => handleSort('package')}
+                    >
+                      <div className="flex items-center justify-center gap-1">
+                        Package
+                        {sortField === 'package' && (
+                          sortDirection === 'asc' ? <ChevronUpIcon className="h-4 w-4" /> : <ChevronDownIcon className="h-4 w-4" />
+                        )}
+                      </div>
+                    </th>
+                    <th
+                      className="text-left px-4 py-3 font-medium cursor-pointer hover:bg-muted/70 select-none"
+                      onClick={() => handleSort('price')}
+                    >
+                      <div className="flex items-center gap-1">
+                        Price
+                        {sortField === 'price' && (
+                          sortDirection === 'asc' ? <ChevronUpIcon className="h-4 w-4" /> : <ChevronDownIcon className="h-4 w-4" />
+                        )}
+                      </div>
+                    </th>
+                    <th
+                      className="text-center px-4 py-3 font-medium cursor-pointer hover:bg-muted/70 select-none"
+                      onClick={() => handleSort('channel')}
+                    >
+                      <div className="flex items-center justify-center gap-1">
+                        Channel
+                        {sortField === 'channel' && (
+                          sortDirection === 'asc' ? <ChevronUpIcon className="h-4 w-4" /> : <ChevronDownIcon className="h-4 w-4" />
+                        )}
+                      </div>
+                    </th>
+                    <th
+                      className="text-center px-4 py-3 font-medium cursor-pointer hover:bg-muted/70 select-none"
+                      onClick={() => handleSort('available')}
+                    >
+                      <div className="flex items-center justify-center gap-1">
+                        Available
+                        {sortField === 'available' && (
+                          sortDirection === 'asc' ? <ChevronUpIcon className="h-4 w-4" /> : <ChevronDownIcon className="h-4 w-4" />
+                        )}
+                      </div>
+                    </th>
                     <th className="text-center px-4 py-3 font-medium w-20">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y">
-                  {skus.map((sku) => (
+                  {filteredAndSortedSkus.map((sku) => (
                     <tr key={sku.id} className="hover:bg-muted/30">
                       <td className="px-4 py-2">
                         <label className="cursor-pointer block">
@@ -320,7 +557,32 @@ export default function StorePage() {
                         </div>
                       </td>
                       <td className="px-4 py-3">{sku.weightOz}oz</td>
+                      <td className="px-4 py-3 text-center">
+                        {sku.packageTypeId ? (
+                          (() => {
+                            const pkgType = packageTypes?.find((pt) => pt.id === sku.packageTypeId);
+                            return pkgType ? (
+                              <span className="inline-flex px-2 py-1 text-xs font-medium rounded-full bg-slate-100 text-slate-800">
+                                {pkgType.name}
+                              </span>
+                            ) : (
+                              <span className="text-muted-foreground text-sm">—</span>
+                            );
+                          })()
+                        ) : (
+                          <span className="text-muted-foreground text-sm">—</span>
+                        )}
+                      </td>
                       <td className="px-4 py-3">{formatPrice(sku.price)}</td>
+                      <td className="px-4 py-3 text-center">
+                        <span className={`inline-flex px-2 py-1 text-xs font-medium rounded-full ${
+                          sku.salesChannel === 'WHOLESALE' ? 'bg-purple-100 text-purple-800' :
+                          sku.salesChannel === 'RETAIL' ? 'bg-blue-100 text-blue-800' :
+                          'bg-gray-100 text-gray-800'
+                        }`}>
+                          {sku.salesChannel || 'BOTH'}
+                        </span>
+                      </td>
                       <td className="px-4 py-3 text-center">
                         <button
                           onClick={() => handleToggleAvailability(sku.id, sku.productId, sku.isAvailable)}
@@ -331,20 +593,6 @@ export default function StorePage() {
                           <span
                             className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
                               sku.isAvailable ? 'translate-x-6' : 'translate-x-1'
-                            }`}
-                          />
-                        </button>
-                      </td>
-                      <td className="px-4 py-3 text-center">
-                        <button
-                          onClick={() => handleTogglePublic(sku.id, sku.productId, sku.isPublic)}
-                          className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
-                            sku.isPublic ? 'bg-green-500' : 'bg-gray-300'
-                          }`}
-                        >
-                          <span
-                            className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                              sku.isPublic ? 'translate-x-6' : 'translate-x-1'
                             }`}
                           />
                         </button>
@@ -397,13 +645,14 @@ export default function StorePage() {
                   {storefrontOrders.map((order) => (
                     <tr key={order.id} className="hover:bg-muted/30">
                       <td className="px-4 py-3 font-medium">{order.orderNumber}</td>
-                      <td className="px-4 py-3">{order.customerName}</td>
+                      <td className="px-4 py-3">{order.customer ?? 'N/A'}</td>
                       <td className="px-4 py-3">{order.items?.length ?? 0} items</td>
                       <td className="px-4 py-3">
                         <span className={`inline-flex px-2 py-1 text-xs font-medium rounded-full ${
                           order.status === 'PENDING' ? 'bg-yellow-100 text-yellow-800' :
                           order.status === 'IN_PROGRESS' ? 'bg-blue-100 text-blue-800' :
-                          order.status === 'COMPLETED' ? 'bg-green-100 text-green-800' :
+                          order.status === 'READY' ? 'bg-green-100 text-green-800' :
+                          order.status === 'DELIVERED' ? 'bg-purple-100 text-purple-800' :
                           order.status === 'CANCELLED' ? 'bg-red-100 text-red-800' :
                           'bg-gray-100 text-gray-800'
                         }`}>
@@ -559,6 +808,35 @@ export default function StorePage() {
                 </div>
               </div>
 
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium mb-1">Sales Channel</label>
+                  <select
+                    value={editForm.salesChannel}
+                    onChange={(e) => setEditForm({ ...editForm, salesChannel: e.target.value as SkuSalesChannel })}
+                    className="w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+                  >
+                    <option value="BOTH">Both (Wholesale & Retail)</option>
+                    <option value="WHOLESALE">Wholesale Only</option>
+                    <option value="RETAIL">Retail Only</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium mb-1">Package Type</label>
+                  <select
+                    value={editForm.packageTypeId ?? ''}
+                    onChange={(e) => setEditForm({ ...editForm, packageTypeId: e.target.value || null })}
+                    className="w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+                  >
+                    <option value="">Not specified</option>
+                    {packageTypes?.filter((pt) => pt.isActive).map((pt) => (
+                      <option key={pt.id} value={pt.id}>{pt.name}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
               {/* Image Upload Section */}
               <div>
                 <label className="block text-sm font-medium mb-2">Product Image</label>
@@ -628,6 +906,7 @@ export default function StorePage() {
           </div>
         </div>
       )}
+
     </div>
   );
 }

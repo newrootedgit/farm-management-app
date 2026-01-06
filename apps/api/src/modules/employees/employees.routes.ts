@@ -4,6 +4,69 @@ import { requireAuth, requireRole } from '../../plugins/tenant.js';
 import { handleError, NotFoundError, ForbiddenError } from '../../lib/errors.js';
 
 const employeesRoutes: FastifyPluginAsync = async (fastify) => {
+  // Get team members (owner + employees)
+  fastify.get('/farms/:farmId/team', {
+    preHandler: [requireAuth()],
+  }, async (request, reply) => {
+    try {
+      const { farmId } = request.params as { farmId: string };
+
+      if (!request.farmId) {
+        throw new ForbiddenError('Access denied');
+      }
+
+      // Get the owner (FarmUser with role='OWNER')
+      const owner = await fastify.prisma.farmUser.findFirst({
+        where: {
+          farmId,
+          role: 'OWNER',
+        },
+        include: {
+          user: {
+            select: {
+              id: true,
+              email: true,
+              name: true,
+              avatarUrl: true,
+            },
+          },
+        },
+      });
+
+      // Get all employees
+      const employees = await fastify.prisma.employee.findMany({
+        where: { farmId },
+        include: {
+          farmUser: {
+            select: {
+              id: true,
+              role: true,
+            },
+          },
+        },
+        orderBy: [
+          { lastName: 'asc' },
+          { firstName: 'asc' },
+        ],
+      });
+
+      return {
+        success: true,
+        data: {
+          owner: owner ? {
+            id: owner.id,
+            role: owner.role,
+            userId: owner.userId,
+            user: owner.user,
+          } : null,
+          employees,
+        },
+      };
+    } catch (error) {
+      return handleError(error, reply);
+    }
+  });
+
   // List employees
   fastify.get('/farms/:farmId/employees', {
     preHandler: [requireAuth()],
@@ -370,6 +433,59 @@ const employeesRoutes: FastifyPluginAsync = async (fastify) => {
         data: {
           employee: updatedEmployee,
           user: { id: user.id, email: user.email, name: user.name },
+        },
+      };
+    } catch (error) {
+      return handleError(error, reply);
+    }
+  });
+
+  // Update owner details
+  fastify.patch('/farms/:farmId/team/owner', {
+    preHandler: [requireAuth(), requireRole('OWNER')],
+  }, async (request, reply) => {
+    try {
+      const { farmId } = request.params as { farmId: string };
+      const { name, email } = request.body as { name?: string; email?: string };
+
+      // Get the owner's FarmUser
+      const ownerFarmUser = await fastify.prisma.farmUser.findFirst({
+        where: {
+          farmId,
+          role: 'OWNER',
+        },
+      });
+
+      if (!ownerFarmUser) {
+        return reply.status(404).send({
+          success: false,
+          error: { code: 'NOT_FOUND', message: 'Owner not found' },
+        });
+      }
+
+      // Update the user
+      const updateData: { name?: string; email?: string } = {};
+      if (name !== undefined) updateData.name = name;
+      if (email !== undefined) updateData.email = email;
+
+      const updatedUser = await fastify.prisma.user.update({
+        where: { id: ownerFarmUser.userId },
+        data: updateData,
+        select: {
+          id: true,
+          email: true,
+          name: true,
+          avatarUrl: true,
+        },
+      });
+
+      return {
+        success: true,
+        data: {
+          id: ownerFarmUser.id,
+          role: ownerFarmUser.role,
+          userId: ownerFarmUser.userId,
+          user: updatedUser,
         },
       };
     } catch (error) {

@@ -37,10 +37,36 @@ const authPlugin: FastifyPluginAsync = async (fastify) => {
 
       request.userExternalId = payload.sub;
 
-      // Get or create user in our database
-      const user = await fastify.prisma.user.findUnique({
+      // Get user by externalId first
+      let user = await fastify.prisma.user.findUnique({
         where: { externalId: payload.sub },
       });
+
+      // If not found by externalId, try to link by email (for test accounts)
+      if (!user && payload.email) {
+        const existingUserByEmail = await fastify.prisma.user.findUnique({
+          where: { email: payload.email as string },
+        });
+
+        if (existingUserByEmail) {
+          // Update externalId to link Clerk account to existing user
+          user = await fastify.prisma.user.update({
+            where: { id: existingUserByEmail.id },
+            data: { externalId: payload.sub },
+          });
+          fastify.log.info(`Linked Clerk user ${payload.sub} to existing user ${user.email}`);
+        } else {
+          // Create new user
+          user = await fastify.prisma.user.create({
+            data: {
+              externalId: payload.sub,
+              email: payload.email as string,
+              name: (payload.name as string) || (payload.email as string).split('@')[0],
+            },
+          });
+          fastify.log.info(`Created new user for Clerk user ${payload.sub}: ${user.email}`);
+        }
+      }
 
       if (user) {
         request.userId = user.id;

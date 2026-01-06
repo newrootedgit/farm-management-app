@@ -367,6 +367,178 @@ describe('Employees Routes', () => {
       expect(body.success).toBe(true);
     });
 
+    it('should clear inviteToken after successful acceptance', async () => {
+      const inviteEmployee = {
+        ...testEmployee,
+        inviteToken: 'valid-token',
+        inviteStatus: 'PENDING',
+        inviteExpiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+        farm: testFarm,
+      };
+
+      mockPrisma.employee.findUnique.mockResolvedValue(inviteEmployee);
+      mockPrisma.user.create.mockResolvedValue({
+        id: 'new-user-id',
+        email: 'john@example.com',
+        name: 'John Doe',
+      });
+      mockPrisma.farmUser.create.mockResolvedValue({
+        id: 'new-farm-user-id',
+        userId: 'new-user-id',
+        farmId: 'test-farm-id-123',
+        role: 'FARM_MANAGER',
+      });
+      mockPrisma.employee.update.mockResolvedValue({
+        ...testEmployee,
+        inviteStatus: 'ACCEPTED',
+        inviteToken: null,
+        farmUserId: 'new-farm-user-id',
+      });
+
+      await app.inject({
+        method: 'POST',
+        url: '/invites/valid-token/accept',
+        payload: {
+          password: 'secure123',
+        },
+      });
+
+      // Verify update was called with inviteToken: null
+      expect(mockPrisma.employee.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            inviteToken: null,
+          }),
+        })
+      );
+    });
+
+    it('should map FARM_MANAGER position to FARM_MANAGER role', async () => {
+      const managerEmployee = {
+        ...testEmployee,
+        position: 'FARM_MANAGER',
+        inviteToken: 'manager-token',
+        inviteStatus: 'PENDING',
+        inviteExpiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+        farm: testFarm,
+      };
+
+      mockPrisma.employee.findUnique.mockResolvedValue(managerEmployee);
+      mockPrisma.user.create.mockResolvedValue({
+        id: 'new-user-id',
+        email: 'john@example.com',
+        name: 'John Doe',
+      });
+      mockPrisma.farmUser.create.mockResolvedValue({
+        id: 'new-farm-user-id',
+        userId: 'new-user-id',
+        farmId: 'test-farm-id-123',
+        role: 'FARM_MANAGER',
+      });
+      mockPrisma.employee.update.mockResolvedValue({
+        ...managerEmployee,
+        inviteStatus: 'ACCEPTED',
+      });
+
+      await app.inject({
+        method: 'POST',
+        url: '/invites/manager-token/accept',
+        payload: { password: 'secure123' },
+      });
+
+      expect(mockPrisma.farmUser.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            role: 'FARM_MANAGER',
+          }),
+        })
+      );
+    });
+
+    it('should map SALESPERSON position to SALESPERSON role', async () => {
+      const salesEmployee = {
+        ...testEmployee,
+        position: 'SALESPERSON',
+        inviteToken: 'sales-token',
+        inviteStatus: 'PENDING',
+        inviteExpiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+        farm: testFarm,
+      };
+
+      mockPrisma.employee.findUnique.mockResolvedValue(salesEmployee);
+      mockPrisma.user.create.mockResolvedValue({
+        id: 'new-user-id',
+        email: 'sales@example.com',
+        name: 'Sales Person',
+      });
+      mockPrisma.farmUser.create.mockResolvedValue({
+        id: 'new-farm-user-id',
+        userId: 'new-user-id',
+        farmId: 'test-farm-id-123',
+        role: 'SALESPERSON',
+      });
+      mockPrisma.employee.update.mockResolvedValue({
+        ...salesEmployee,
+        inviteStatus: 'ACCEPTED',
+      });
+
+      await app.inject({
+        method: 'POST',
+        url: '/invites/sales-token/accept',
+        payload: { password: 'secure123' },
+      });
+
+      expect(mockPrisma.farmUser.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            role: 'SALESPERSON',
+          }),
+        })
+      );
+    });
+
+    it('should map FARM_OPERATOR position to FARM_OPERATOR role', async () => {
+      const operatorEmployee = {
+        ...testEmployee,
+        position: 'FARM_OPERATOR',
+        inviteToken: 'operator-token',
+        inviteStatus: 'PENDING',
+        inviteExpiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+        farm: testFarm,
+      };
+
+      mockPrisma.employee.findUnique.mockResolvedValue(operatorEmployee);
+      mockPrisma.user.create.mockResolvedValue({
+        id: 'new-user-id',
+        email: 'operator@example.com',
+        name: 'Farm Operator',
+      });
+      mockPrisma.farmUser.create.mockResolvedValue({
+        id: 'new-farm-user-id',
+        userId: 'new-user-id',
+        farmId: 'test-farm-id-123',
+        role: 'FARM_OPERATOR',
+      });
+      mockPrisma.employee.update.mockResolvedValue({
+        ...operatorEmployee,
+        inviteStatus: 'ACCEPTED',
+      });
+
+      await app.inject({
+        method: 'POST',
+        url: '/invites/operator-token/accept',
+        payload: { password: 'secure123' },
+      });
+
+      expect(mockPrisma.farmUser.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            role: 'FARM_OPERATOR',
+          }),
+        })
+      );
+    });
+
     it('should reject short password', async () => {
       const response = await app.inject({
         method: 'POST',

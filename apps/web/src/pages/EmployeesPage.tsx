@@ -1,19 +1,23 @@
 import { useState } from 'react';
 import { useFarmStore } from '@/stores/farm-store';
-import { useEmployees, useCreateEmployee, useUpdateEmployee, useDeleteEmployee, useSendEmployeeInvite } from '@/lib/api-client';
+import { useTeam, useCreateEmployee, useUpdateEmployee, useDeleteEmployee, useSendEmployeeInvite, useUpdateOwner } from '@/lib/api-client';
 import type { Employee, CreateEmployee, UpdateEmployee, EmployeePosition, EmployeeStatus, InviteStatus } from '@farm/shared';
 
 // Position labels
 const POSITION_LABELS: Record<EmployeePosition, string> = {
+  ADMIN: 'Admin',
   FARM_MANAGER: 'Farm Manager',
   SALESPERSON: 'Salesperson',
   FARM_OPERATOR: 'Farm Operator',
+  DRIVER: 'Driver',
 };
 
 const POSITION_COLORS: Record<EmployeePosition, string> = {
+  ADMIN: 'bg-indigo-100 text-indigo-800 dark:bg-indigo-900/30 dark:text-indigo-300',
   FARM_MANAGER: 'bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-300',
   SALESPERSON: 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300',
   FARM_OPERATOR: 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300',
+  DRIVER: 'bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-300',
 };
 
 // Status labels
@@ -270,24 +274,111 @@ function EmployeeModal({ isOpen, onClose, employee, onSubmit, isSubmitting }: Em
   );
 }
 
+// Owner Modal Component
+interface OwnerModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+  owner: {
+    user: {
+      name: string | null;
+      email: string;
+    };
+  };
+  onSubmit: (data: { name?: string; email?: string }) => void;
+  isSubmitting: boolean;
+}
+
+function OwnerModal({ isOpen, onClose, owner, onSubmit, isSubmitting }: OwnerModalProps) {
+  const [formData, setFormData] = useState({
+    name: owner?.user.name ?? '',
+    email: owner?.user.email ?? '',
+  });
+
+  if (!isOpen) return null;
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    onSubmit({
+      name: formData.name || undefined,
+      email: formData.email || undefined,
+    });
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center">
+      <div className="fixed inset-0 bg-black/50" onClick={onClose} />
+      <div className="relative bg-background rounded-lg shadow-lg w-full max-w-md p-6">
+        <h2 className="text-xl font-semibold mb-4">Edit Owner</h2>
+
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium mb-1">Name</label>
+            <input
+              type="text"
+              value={formData.name}
+              onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+              className="w-full px-3 py-2 border rounded-md"
+              placeholder="Owner name"
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium mb-1">Email</label>
+            <input
+              type="email"
+              value={formData.email}
+              onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+              className="w-full px-3 py-2 border rounded-md"
+              required
+            />
+          </div>
+
+          <div className="flex justify-end gap-2 pt-4">
+            <button
+              type="button"
+              onClick={onClose}
+              className="px-4 py-2 border rounded-md hover:bg-muted"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={isSubmitting}
+              className="px-4 py-2 bg-primary text-primary-foreground rounded-md hover:bg-primary/90 disabled:opacity-50"
+            >
+              {isSubmitting ? 'Saving...' : 'Update'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
 export default function EmployeesPage() {
   const { currentFarmId } = useFarmStore();
-  const { data: employees, isLoading } = useEmployees(currentFarmId ?? undefined);
+  const { data: teamData, isLoading } = useTeam(currentFarmId ?? undefined);
   const createEmployee = useCreateEmployee(currentFarmId ?? '');
   const updateEmployee = useUpdateEmployee(currentFarmId ?? '');
   const deleteEmployee = useDeleteEmployee(currentFarmId ?? '');
   const sendInvite = useSendEmployeeInvite(currentFarmId ?? '');
+  const updateOwner = useUpdateOwner(currentFarmId ?? '');
 
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingEmployee, setEditingEmployee] = useState<Employee | null>(null);
   const [statusFilter, setStatusFilter] = useState<string>('');
+  const [isOwnerModalOpen, setIsOwnerModalOpen] = useState(false);
+
+  // Extract owner and employees from team data
+  const owner = teamData?.owner;
+  const employees = teamData?.employees;
 
   if (!currentFarmId) {
     return (
       <div className="flex items-center justify-center h-[60vh]">
         <div className="text-center">
           <h2 className="text-xl font-semibold mb-2">No Farm Selected</h2>
-          <p className="text-muted-foreground">Select a farm from the sidebar to manage employees.</p>
+          <p className="text-muted-foreground">Select a farm from the sidebar to manage your team.</p>
         </div>
       </div>
     );
@@ -349,6 +440,15 @@ export default function EmployeesPage() {
     }
   };
 
+  const handleUpdateOwner = async (data: { name?: string; email?: string }) => {
+    try {
+      await updateOwner.mutateAsync(data);
+      setIsOwnerModalOpen(false);
+    } catch (error) {
+      console.error('Failed to update owner:', error);
+    }
+  };
+
   // Filter employees
   const filteredEmployees = employees?.filter((e) => {
     if (statusFilter && e.status !== statusFilter) return false;
@@ -362,22 +462,22 @@ export default function EmployeesPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold">Employees</h1>
-          <p className="text-muted-foreground">Manage staff, schedules, and time tracking</p>
+          <h1 className="text-2xl font-bold">Team</h1>
+          <p className="text-muted-foreground">Manage your team members, schedules, and time tracking</p>
         </div>
         <button
           onClick={handleAddEmployee}
           className="px-4 py-2 bg-primary text-primary-foreground rounded-md hover:bg-primary/90"
         >
-          Add Employee
+          Add Team Member
         </button>
       </div>
 
       {/* Stats */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <div className="border rounded-lg p-4 bg-card">
-          <p className="text-sm text-muted-foreground">Active Employees</p>
-          <p className="text-2xl font-bold">{activeCount}</p>
+          <p className="text-sm text-muted-foreground">Team Members</p>
+          <p className="text-2xl font-bold">{(owner ? 1 : 0) + activeCount}</p>
         </div>
         <div className="border rounded-lg p-4 bg-card">
           <p className="text-sm text-muted-foreground">On Leave</p>
@@ -403,26 +503,26 @@ export default function EmployeesPage() {
         </select>
       </div>
 
-      {/* Employee list */}
+      {/* Team list */}
       {isLoading ? (
         <div className="flex items-center justify-center h-32">
-          <div className="text-muted-foreground">Loading employees...</div>
+          <div className="text-muted-foreground">Loading team...</div>
         </div>
-      ) : filteredEmployees.length === 0 ? (
+      ) : (!owner && filteredEmployees.length === 0) ? (
         <div className="border rounded-lg p-12 text-center">
           <div className="text-4xl mb-4">👥</div>
-          <h3 className="text-lg font-semibold">No Employees Found</h3>
+          <h3 className="text-lg font-semibold">No Team Members Found</h3>
           <p className="text-muted-foreground mb-4">
             {employees?.length === 0
-              ? 'Get started by adding your first employee.'
-              : 'No employees match your current filter.'}
+              ? 'Get started by adding your first team member.'
+              : 'No team members match your current filter.'}
           </p>
           {employees?.length === 0 && (
             <button
               onClick={handleAddEmployee}
               className="px-4 py-2 bg-primary text-primary-foreground rounded-md hover:bg-primary/90"
             >
-              Add First Employee
+              Add First Team Member
             </button>
           )}
         </div>
@@ -440,6 +540,44 @@ export default function EmployeesPage() {
               </tr>
             </thead>
             <tbody className="divide-y">
+              {/* Owner row */}
+              {owner && !statusFilter && (
+                <tr className="bg-amber-50/50 dark:bg-amber-900/10 hover:bg-amber-100/50 dark:hover:bg-amber-900/20">
+                  <td className="px-4 py-3">
+                    <div className="font-medium">
+                      {owner.user.name || 'Farm Owner'}
+                    </div>
+                  </td>
+                  <td className="px-4 py-3">
+                    <span className="inline-flex px-2 py-1 text-xs font-medium rounded-full bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300">
+                      Owner
+                    </span>
+                  </td>
+                  <td className="px-4 py-3">
+                    <div className="text-sm">
+                      {owner.user.email}
+                    </div>
+                  </td>
+                  <td className="px-4 py-3">
+                    <span className="inline-flex w-fit px-2 py-1 text-xs font-medium rounded-full bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300">
+                      Account Active
+                    </span>
+                  </td>
+                  <td className="px-4 py-3">
+                    <span className="inline-flex px-2 py-1 text-xs font-medium rounded-full bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300">
+                      Active
+                    </span>
+                  </td>
+                  <td className="px-4 py-3 text-right">
+                    <button
+                      onClick={() => setIsOwnerModalOpen(true)}
+                      className="text-sm text-primary hover:underline"
+                    >
+                      Edit
+                    </button>
+                  </td>
+                </tr>
+              )}
               {filteredEmployees.map((employee) => {
                 const inviteStatus = (employee.inviteStatus as InviteStatus) || 'NOT_INVITED';
                 const canSendInvite = employee.email && (inviteStatus === 'NOT_INVITED' || inviteStatus === 'EXPIRED' || inviteStatus === 'REVOKED');
@@ -451,9 +589,6 @@ export default function EmployeesPage() {
                       <div className="font-medium">
                         {employee.firstName} {employee.lastName}
                       </div>
-                      {employee.department && (
-                        <div className="text-sm text-muted-foreground">{employee.department}</div>
-                      )}
                     </td>
                     <td className="px-4 py-3">
                       {employee.position && (
@@ -522,7 +657,7 @@ export default function EmployeesPage() {
         </div>
       )}
 
-      {/* Modal */}
+      {/* Employee Modal */}
       <EmployeeModal
         isOpen={isModalOpen}
         onClose={handleCloseModal}
@@ -530,6 +665,17 @@ export default function EmployeesPage() {
         onSubmit={handleSubmit}
         isSubmitting={createEmployee.isPending || updateEmployee.isPending}
       />
+
+      {/* Owner Modal */}
+      {owner && (
+        <OwnerModal
+          isOpen={isOwnerModalOpen}
+          onClose={() => setIsOwnerModalOpen(false)}
+          owner={owner}
+          onSubmit={handleUpdateOwner}
+          isSubmitting={updateOwner.isPending}
+        />
+      )}
     </div>
   );
 }

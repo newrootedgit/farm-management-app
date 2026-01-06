@@ -19,6 +19,7 @@ import {
   UpdateOrderItemSchema,
   UpdateTaskSchema,
   calculateProductionSchedule,
+  calculateBlendProductionSchedule,
   generateOrderNumber,
 } from '@farm/shared';
 import { requireAuth, requireRole } from '../../plugins/tenant.js';
@@ -1147,101 +1148,238 @@ const farmsRoutes: FastifyPluginAsync = async (fastify) => {
         for (const itemData of data.items) {
           const product = await tx.product.findUnique({
             where: { id: itemData.productId },
+            include: {
+              blend: {
+                include: {
+                  ingredients: {
+                    include: { product: true },
+                    orderBy: { displayOrder: 'asc' },
+                  },
+                },
+              },
+            },
           });
 
           if (!product) {
             throw new NotFoundError('Product', itemData.productId);
           }
 
-          // Validate product has required microgreen fields (daysSoaking is optional)
-          if (
-            product.avgYieldPerTray == null ||
-            product.daysGermination == null ||
-            product.daysLight == null
-          ) {
-            throw new Error(
-              `Product "${product.name}" is missing required production data (yield, germination days, light days)`
-            );
-          }
+          const harvestDate = new Date(itemData.harvestDate);
+          const overagePercent = itemData.overagePercent ?? 10;
 
-          // Calculate production schedule
-          const schedule = calculateProductionSchedule({
-            quantityOz: itemData.quantityOz,
-            avgYieldPerTray: product.avgYieldPerTray,
-            overagePercent: itemData.overagePercent ?? 10,
-            harvestDate: new Date(itemData.harvestDate),
-            daysSoaking: product.daysSoaking,
-            daysGermination: product.daysGermination,
-            daysLight: product.daysLight,
-          });
+          // Check if this is a blend product
+          if (product.isBlend && product.blend) {
+            // ============================================
+            // BLEND PRODUCT - Staggered ingredient tasks
+            // ============================================
+            const blend = product.blend;
 
-          // Create order item
-          const orderItem = await tx.orderItem.create({
-            data: {
-              orderId: newOrder.id,
-              productId: itemData.productId,
+            // Calculate staggered production schedule for all ingredients
+            const blendSchedule = calculateBlendProductionSchedule({
               quantityOz: itemData.quantityOz,
-              harvestDate: new Date(itemData.harvestDate),
-              overagePercent: itemData.overagePercent ?? 10,
-              traysNeeded: schedule.traysNeeded,
-              soakDate: schedule.soakDate,
-              seedDate: schedule.seedDate,
-              moveToLightDate: schedule.moveToLightDate,
-            },
-          });
-
-          // Auto-generate tasks for this order item
-          const tasks: Array<{
-            title: string;
-            type: 'SOAK' | 'SEED' | 'MOVE_TO_LIGHT' | 'HARVESTING';
-            dueDate: Date;
-            description: string;
-          }> = [];
-
-          // Only add SOAK task if this variety requires soaking
-          if (schedule.requiresSoaking) {
-            tasks.push({
-              title: `SOAK: ${product.name}`,
-              type: 'SOAK',
-              dueDate: schedule.soakDate,
-              description: `Soak ${schedule.traysNeeded} trays of ${product.name} seeds`,
+              overagePercent,
+              harvestDate,
+              ingredients: blend.ingredients.map((ing) => ({
+                productId: ing.productId,
+                productName: ing.product.name,
+                ratioPercent: ing.ratioPercent,
+                avgYieldPerTray: ing.product.avgYieldPerTray || 8,
+                daysSoaking: ing.overrideDaysSoaking ?? ing.product.daysSoaking,
+                daysGermination: ing.overrideDaysGermination ?? ing.product.daysGermination ?? 0,
+                daysLight: ing.overrideDaysLight ?? ing.product.daysLight ?? 0,
+              })),
             });
-          }
 
-          tasks.push(
-            {
-              title: `SEED: ${product.name}`,
-              type: 'SEED',
-              dueDate: schedule.seedDate,
-              description: `Plant ${schedule.traysNeeded} trays of ${product.name}`,
-            },
-            {
-              title: `MOVE TO LIGHT: ${product.name}`,
-              type: 'MOVE_TO_LIGHT',
-              dueDate: schedule.moveToLightDate,
-              description: `Move ${schedule.traysNeeded} trays of ${product.name} to grow lights`,
-            },
-            {
-              title: `HARVEST: ${product.name}`,
-              type: 'HARVESTING',
-              dueDate: schedule.harvestDate,
-              description: `Harvest ${itemData.quantityOz}oz of ${product.name} (${schedule.traysNeeded} trays)`,
+            // Calculate total trays needed (sum of all ingredient trays)
+            const totalTrays = blendSchedule.ingredients.reduce(
+              (sum, ing) => sum + ing.traysNeeded,
+              0
+            );
+
+            // Create order item for the blend
+            const orderItem = await tx.orderItem.create({
+              data: {
+                orderId: newOrder.id,
+                productId: itemData.productId,
+                quantityOz: itemData.quantityOz,
+                harvestDate,
+                overagePercent,
+                traysNeeded: totalTrays,
+                soakDate: blendSchedule.earliestStartDate,
+                seedDate: blendSchedule.earliestStartDate,
+                moveToLightDate: blendSchedule.earliestStartDate, // Not accurate for blends, but stored for consistency
+              },
+            });
+
+            // Create BlendOrderInstance for tracking
+            await tx.blendOrderInstance.create({
+              data: {
+                blendId: blend.id,
+                orderItemId: orderItem.id,
+                ingredientTargets: blendSchedule.ingredients.map((ing) => ({
+                  productId: ing.productId,
+                  productName: ing.productName,
+                  targetOz: ing.targetOz,
+                  traysNeeded: ing.traysNeeded,
+                })),
+              },
+            });
+
+            // Generate tasks for EACH ingredient (staggered dates)
+            for (const ingSchedule of blendSchedule.ingredients) {
+              // SOAK task (if this ingredient requires soaking)
+              if (ingSchedule.requiresSoaking) {
+                await tx.task.create({
+                  data: {
+                    farmId,
+                    orderItemId: orderItem.id,
+                    title: `SOAK: ${ingSchedule.productName} (for ${product.name})`,
+                    type: 'SOAK',
+                    dueDate: ingSchedule.soakDate,
+                    description: `Soak ${ingSchedule.traysNeeded} trays of ${ingSchedule.productName} seeds for ${product.name} blend`,
+                    priority: 'MEDIUM',
+                    status: 'TODO',
+                  },
+                });
+              }
+
+              // SEED task
+              await tx.task.create({
+                data: {
+                  farmId,
+                  orderItemId: orderItem.id,
+                  title: `SEED: ${ingSchedule.productName} (for ${product.name})`,
+                  type: 'SEED',
+                  dueDate: ingSchedule.seedDate,
+                  description: `Plant ${ingSchedule.traysNeeded} trays of ${ingSchedule.productName} for ${product.name} blend`,
+                  priority: 'MEDIUM',
+                  status: 'TODO',
+                },
+              });
+
+              // MOVE TO LIGHT task
+              await tx.task.create({
+                data: {
+                  farmId,
+                  orderItemId: orderItem.id,
+                  title: `MOVE TO LIGHT: ${ingSchedule.productName} (for ${product.name})`,
+                  type: 'MOVE_TO_LIGHT',
+                  dueDate: ingSchedule.moveToLightDate,
+                  description: `Move ${ingSchedule.traysNeeded} trays of ${ingSchedule.productName} to grow lights for ${product.name} blend`,
+                  priority: 'MEDIUM',
+                  status: 'TODO',
+                },
+              });
             }
-          );
 
-          for (const taskData of tasks) {
+            // Single HARVEST task for the entire blend
             await tx.task.create({
               data: {
                 farmId,
                 orderItemId: orderItem.id,
-                title: taskData.title,
-                type: taskData.type,
-                dueDate: taskData.dueDate,
-                description: taskData.description,
+                title: `HARVEST: ${product.name} (Blend)`,
+                type: 'HARVESTING',
+                dueDate: harvestDate,
+                description: `Harvest and mix ${itemData.quantityOz}oz of ${product.name} blend (${totalTrays} total trays)`,
                 priority: 'MEDIUM',
                 status: 'TODO',
               },
             });
+          } else {
+            // ============================================
+            // REGULAR PRODUCT - Standard task generation
+            // ============================================
+
+            // Validate product has required microgreen fields (daysSoaking is optional)
+            if (
+              product.avgYieldPerTray == null ||
+              product.daysGermination == null ||
+              product.daysLight == null
+            ) {
+              throw new Error(
+                `Product "${product.name}" is missing required production data (yield, germination days, light days)`
+              );
+            }
+
+            // Calculate production schedule
+            const schedule = calculateProductionSchedule({
+              quantityOz: itemData.quantityOz,
+              avgYieldPerTray: product.avgYieldPerTray,
+              overagePercent,
+              harvestDate,
+              daysSoaking: product.daysSoaking,
+              daysGermination: product.daysGermination,
+              daysLight: product.daysLight,
+            });
+
+            // Create order item
+            const orderItem = await tx.orderItem.create({
+              data: {
+                orderId: newOrder.id,
+                productId: itemData.productId,
+                quantityOz: itemData.quantityOz,
+                harvestDate,
+                overagePercent,
+                traysNeeded: schedule.traysNeeded,
+                soakDate: schedule.soakDate,
+                seedDate: schedule.seedDate,
+                moveToLightDate: schedule.moveToLightDate,
+              },
+            });
+
+            // Auto-generate tasks for this order item
+            const tasks: Array<{
+              title: string;
+              type: 'SOAK' | 'SEED' | 'MOVE_TO_LIGHT' | 'HARVESTING';
+              dueDate: Date;
+              description: string;
+            }> = [];
+
+            // Only add SOAK task if this variety requires soaking
+            if (schedule.requiresSoaking) {
+              tasks.push({
+                title: `SOAK: ${product.name}`,
+                type: 'SOAK',
+                dueDate: schedule.soakDate,
+                description: `Soak ${schedule.traysNeeded} trays of ${product.name} seeds`,
+              });
+            }
+
+            tasks.push(
+              {
+                title: `SEED: ${product.name}`,
+                type: 'SEED',
+                dueDate: schedule.seedDate,
+                description: `Plant ${schedule.traysNeeded} trays of ${product.name}`,
+              },
+              {
+                title: `MOVE TO LIGHT: ${product.name}`,
+                type: 'MOVE_TO_LIGHT',
+                dueDate: schedule.moveToLightDate,
+                description: `Move ${schedule.traysNeeded} trays of ${product.name} to grow lights`,
+              },
+              {
+                title: `HARVEST: ${product.name}`,
+                type: 'HARVESTING',
+                dueDate: schedule.harvestDate,
+                description: `Harvest ${itemData.quantityOz}oz of ${product.name} (${schedule.traysNeeded} trays)`,
+              }
+            );
+
+            for (const taskData of tasks) {
+              await tx.task.create({
+                data: {
+                  farmId,
+                  orderItemId: orderItem.id,
+                  title: taskData.title,
+                  type: taskData.type,
+                  dueDate: taskData.dueDate,
+                  description: taskData.description,
+                  priority: 'MEDIUM',
+                  status: 'TODO',
+                },
+              });
+            }
           }
         }
 

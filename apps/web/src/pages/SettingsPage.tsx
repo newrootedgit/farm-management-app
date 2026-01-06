@@ -37,6 +37,24 @@ export default function SettingsPage() {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [paymentTiming, setPaymentTiming] = useState('UPFRONT');
 
+  // Contact information
+  const [phone, setPhone] = useState('');
+  const [email, setEmail] = useState('');
+  const [website, setWebsite] = useState('');
+
+  // Business address
+  const [addressLine1, setAddressLine1] = useState('');
+  const [addressLine2, setAddressLine2] = useState('');
+  const [city, setCity] = useState('');
+  const [state, setState] = useState('');
+  const [postalCode, setPostalCode] = useState('');
+  const [country, setCountry] = useState('US');
+
+  // Document settings
+  const [invoicePrefix, setInvoicePrefix] = useState('INV');
+  const [nextInvoiceNumber, setNextInvoiceNumber] = useState(1);
+  const [invoiceFooterNotes, setInvoiceFooterNotes] = useState('');
+
   // Populate form when farm data loads
   useEffect(() => {
     if (farm) {
@@ -45,6 +63,21 @@ export default function SettingsPage() {
       setCurrency(farm.currency || 'USD');
       setWeightUnit(farm.weightUnit || 'oz');
       setLengthUnit(farm.lengthUnit || 'in');
+      // Contact info
+      setPhone(farm.phone || '');
+      setEmail(farm.email || '');
+      setWebsite(farm.website || '');
+      // Address
+      setAddressLine1(farm.addressLine1 || '');
+      setAddressLine2(farm.addressLine2 || '');
+      setCity(farm.city || '');
+      setState(farm.state || '');
+      setPostalCode(farm.postalCode || '');
+      setCountry(farm.country || 'US');
+      // Document settings
+      setInvoicePrefix(farm.invoicePrefix || 'INV');
+      setNextInvoiceNumber(farm.nextInvoiceNumber || 1);
+      setInvoiceFooterNotes(farm.invoiceFooterNotes || '');
     }
   }, [farm]);
 
@@ -83,8 +116,23 @@ export default function SettingsPage() {
         name: name.trim(),
         timezone,
         currency,
-        weightUnit,
-        lengthUnit,
+        weightUnit: weightUnit as 'oz' | 'g' | 'lb' | 'kg',
+        lengthUnit: lengthUnit as 'in' | 'ft' | 'cm' | 'm',
+        // Contact info
+        phone: phone || undefined,
+        email: email || undefined,
+        website: website || undefined,
+        // Address
+        addressLine1: addressLine1 || undefined,
+        addressLine2: addressLine2 || undefined,
+        city: city || undefined,
+        state: state || undefined,
+        postalCode: postalCode || undefined,
+        country,
+        // Document settings
+        invoicePrefix,
+        nextInvoiceNumber,
+        invoiceFooterNotes: invoiceFooterNotes || null,
       });
       setSuccess('Settings saved successfully');
       setTimeout(() => setSuccess(''), 3000);
@@ -266,6 +314,202 @@ export default function SettingsPage() {
               <option value="cm">Centimeters (cm)</option>
               <option value="m">Meters (m)</option>
             </select>
+          </div>
+        </div>
+
+        <button
+          onClick={handleSave}
+          disabled={updateFarm.isPending}
+          className="px-4 py-2 bg-primary text-primary-foreground rounded-md hover:bg-primary/90 disabled:opacity-50"
+        >
+          {updateFarm.isPending ? 'Saving...' : 'Save Changes'}
+        </button>
+      </div>
+
+      {/* Business Address */}
+      <div className="border rounded-lg p-6 bg-card space-y-4">
+        <h2 className="text-lg font-semibold">Business Address</h2>
+        <p className="text-sm text-muted-foreground">
+          Your business address will appear on invoices, packing slips, and other documents.
+        </p>
+
+        <div className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium mb-1">Address Line 1</label>
+            <input
+              type="text"
+              value={addressLine1}
+              onChange={(e) => setAddressLine1(e.target.value)}
+              placeholder="123 Farm Road"
+              className="w-full px-3 py-2 border rounded-md bg-background"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium mb-1">Address Line 2</label>
+            <input
+              type="text"
+              value={addressLine2}
+              onChange={(e) => setAddressLine2(e.target.value)}
+              placeholder="Suite 100 (optional)"
+              className="w-full px-3 py-2 border rounded-md bg-background"
+            />
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium mb-1">City</label>
+              <input
+                type="text"
+                value={city}
+                onChange={(e) => setCity(e.target.value)}
+                placeholder="City"
+                className="w-full px-3 py-2 border rounded-md bg-background"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium mb-1">State / Province</label>
+              <input
+                type="text"
+                value={state}
+                onChange={(e) => setState(e.target.value)}
+                placeholder="CA"
+                className="w-full px-3 py-2 border rounded-md bg-background"
+              />
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium mb-1">Postal Code</label>
+              <input
+                type="text"
+                value={postalCode}
+                onChange={(e) => setPostalCode(e.target.value)}
+                placeholder="12345"
+                className="w-full px-3 py-2 border rounded-md bg-background"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium mb-1">Country</label>
+              <select
+                value={country}
+                onChange={(e) => setCountry(e.target.value)}
+                className="w-full px-3 py-2 border rounded-md bg-background"
+              >
+                <option value="US">United States</option>
+                <option value="CA">Canada</option>
+                <option value="GB">United Kingdom</option>
+                <option value="AU">Australia</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <button
+          onClick={handleSave}
+          disabled={updateFarm.isPending}
+          className="px-4 py-2 bg-primary text-primary-foreground rounded-md hover:bg-primary/90 disabled:opacity-50"
+        >
+          {updateFarm.isPending ? 'Saving...' : 'Save Changes'}
+        </button>
+      </div>
+
+      {/* Contact Information */}
+      <div className="border rounded-lg p-6 bg-card space-y-4">
+        <h2 className="text-lg font-semibold">Contact Information</h2>
+        <p className="text-sm text-muted-foreground">
+          Contact details that will appear on documents and be available to customers.
+        </p>
+
+        <div className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium mb-1">Phone</label>
+            <input
+              type="tel"
+              value={phone}
+              onChange={(e) => setPhone(e.target.value)}
+              placeholder="(555) 123-4567"
+              className="w-full px-3 py-2 border rounded-md bg-background"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium mb-1">Email</label>
+            <input
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="orders@yourfarm.com"
+              className="w-full px-3 py-2 border rounded-md bg-background"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium mb-1">Website</label>
+            <input
+              type="url"
+              value={website}
+              onChange={(e) => setWebsite(e.target.value)}
+              placeholder="https://yourfarm.com"
+              className="w-full px-3 py-2 border rounded-md bg-background"
+            />
+          </div>
+        </div>
+
+        <button
+          onClick={handleSave}
+          disabled={updateFarm.isPending}
+          className="px-4 py-2 bg-primary text-primary-foreground rounded-md hover:bg-primary/90 disabled:opacity-50"
+        >
+          {updateFarm.isPending ? 'Saving...' : 'Save Changes'}
+        </button>
+      </div>
+
+      {/* Document Settings */}
+      <div className="border rounded-lg p-6 bg-card space-y-4">
+        <h2 className="text-lg font-semibold">Document Settings</h2>
+        <p className="text-sm text-muted-foreground">
+          Configure how invoices and other documents are generated.
+        </p>
+
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium mb-1">Invoice Prefix</label>
+              <input
+                type="text"
+                value={invoicePrefix}
+                onChange={(e) => setInvoicePrefix(e.target.value)}
+                placeholder="INV"
+                maxLength={10}
+                className="w-full px-3 py-2 border rounded-md bg-background"
+              />
+              <p className="text-xs text-muted-foreground mt-1">
+                e.g., INV-0001, FARM-0001
+              </p>
+            </div>
+            <div>
+              <label className="block text-sm font-medium mb-1">Next Invoice Number</label>
+              <input
+                type="number"
+                value={nextInvoiceNumber}
+                onChange={(e) => setNextInvoiceNumber(parseInt(e.target.value) || 1)}
+                min={1}
+                className="w-full px-3 py-2 border rounded-md bg-background"
+              />
+              <p className="text-xs text-muted-foreground mt-1">
+                Auto-increments after each invoice
+              </p>
+            </div>
+          </div>
+          <div>
+            <label className="block text-sm font-medium mb-1">Invoice Footer Notes</label>
+            <textarea
+              value={invoiceFooterNotes}
+              onChange={(e) => setInvoiceFooterNotes(e.target.value)}
+              placeholder="Thank you for your business! Payment is due within 30 days."
+              rows={3}
+              className="w-full px-3 py-2 border rounded-md bg-background resize-none"
+            />
+            <p className="text-xs text-muted-foreground mt-1">
+              Appears at the bottom of all invoices
+            </p>
           </div>
         </div>
 

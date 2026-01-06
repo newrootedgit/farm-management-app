@@ -39,6 +39,24 @@ model Farm {
   weightUnit String @default("oz") // oz, g, lb, kg
   lengthUnit String @default("in") // in, ft, cm, m
 
+  // Contact Information (for document headers)
+  phone   String?
+  email   String?
+  website String?
+
+  // Business Address
+  addressLine1 String?
+  addressLine2 String?
+  city         String?
+  state        String?
+  postalCode   String?
+  country      String @default("US")
+
+  // Document Settings
+  invoicePrefix      String @default("INV")
+  nextInvoiceNumber  Int    @default(1)
+  invoiceFooterNotes String?
+
   // Relations to all tenant-scoped data
   users              FarmUser[]
   zones              Zone[]
@@ -50,6 +68,7 @@ model Farm {
   employees          Employee[]
   products           Product[]
   productCategories  ProductCategory[]
+  packageTypes       PackageType[]
   inventoryItems     InventoryItem[]
   orders             Order[]
   customers          Customer[]
@@ -64,6 +83,15 @@ model Farm {
   paymentSettings    PaymentSettings?
   payments           Payment[]
   rackAssignments    RackAssignment[]
+  recurringSchedules RecurringOrderSchedule[]
+  blends             Blend[]
+  deliveryRoutes     DeliveryRoute[]
+  generatedDocuments GeneratedDocument[]
+  csaPrograms        CsaProgram[]
+
+  // Supplies Inventory
+  supplyCategories SupplyCategory[]
+  supplies         Supply[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -408,10 +436,26 @@ model Product {
   unitCost  Float?
   unitPrice Float?
 
-  inventoryItems InventoryItem[]
-  zoneOutputs    ZoneOutput[]
-  orderItems     OrderItem[]
-  skus           Sku[]
+  // Blend support
+  isBlend          Boolean @default(false)  // True if this product is a blend
+  blend            Blend?                    // If isBlend, links to blend definition
+
+  // When used as an ingredient in blends
+  blendIngredients BlendIngredient[] @relation("IngredientProduct")
+  ingredientYields BlendIngredientYield[] @relation("IngredientYields")
+
+  inventoryItems      InventoryItem[]
+  zoneOutputs         ZoneOutput[]
+  orderItems          OrderItem[]
+  skus                Sku[]
+  recurringOrderItems RecurringOrderItem[]
+
+  // CSA relations
+  csaMemberPreferences CsaMemberPreference[]
+  csaWeekAllocations   CsaWeekAllocation[]
+
+  // Supplies: Link to seed supply for auto-tracking
+  seedSupplies Supply[] @relation("SeedProduct")
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -424,14 +468,42 @@ model Product {
 // SKU (Stock Keeping Unit) - Sized Product Variants
 // ============================================================================
 
+enum SkuSalesChannel {
+  WHOLESALE   // Sold to distributors, restaurants, stores
+  RETAIL      // Sold directly to consumers
+  BOTH        // Available for both channels
+}
+
+// Custom package types per farm
+model PackageType {
+  id        String  @id @default(cuid())
+  farmId    String
+  farm      Farm    @relation(fields: [farmId], references: [id], onDelete: Cascade)
+
+  name      String  // e.g., "Clamshell", "Bag", "Bulk"
+  code      String  // e.g., "CL", "BG", "BK" - used in SKU code generation
+
+  isActive  Boolean @default(true)
+
+  skus      Sku[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([farmId, name])
+  @@unique([farmId, code])
+  @@index([farmId])
+}
+
 model Sku {
   id        String  @id @default(cuid())
   productId String
   product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
 
-  skuCode   String  // e.g., "ARU-4OZ"
-  name      String  // Display name: "4oz Arugula"
-  weightOz  Float   // Weight in ounces
+  skuCode    String  // e.g., "ARU-4OZ", "ARU-3LB"
+  name       String  // Display name: "4oz Arugula", "3lb Arugula"
+  weightOz   Float   // Weight value (name kept for backward compatibility)
+  weightUnit String  @default("oz") // Unit of measurement: oz, lb, g, kg
 
   price     Int     // Price in cents (500 = $5.00)
 
@@ -442,6 +514,11 @@ model Sku {
   isPublic          Boolean @default(true)
   imageUrl          String? // SKU product image
 
+  // Sales channel and packaging
+  salesChannel  SkuSalesChannel @default(BOTH)  // Wholesale, Retail, or Both
+  packageTypeId String?
+  packageType   PackageType?    @relation(fields: [packageTypeId], references: [id])
+
   orderItems OrderItem[]
 
   createdAt DateTime @default(now())
@@ -449,6 +526,8 @@ model Sku {
 
   @@unique([productId, skuCode])
   @@index([productId])
+  @@index([salesChannel])
+  @@index([packageTypeId])
 }
 
 model InventoryItem {
@@ -542,7 +621,9 @@ model Customer {
   isActive Boolean @default(true)
 
   // Relations
-  orders Order[]
+  orders             Order[]
+  recurringSchedules RecurringOrderSchedule[]
+  csaMemberships     CsaMember[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -582,13 +663,44 @@ model Order {
   notes       String?
 
   // Order source tracking
-  orderSource String @default("INTERNAL") // INTERNAL, STOREFRONT, API
+  orderSource String @default("INTERNAL") // INTERNAL, STOREFRONT, API, RECURRING
 
   // Payment tracking
   paymentStatus String?   // UNPAID, PAID, REFUNDED
+  paymentType   PaymentType @default(INVOICE)
 
-  items    OrderItem[]
-  payments Payment[]
+  // Fulfillment tracking
+  fulfillmentMethod FulfillmentMethod @default(CUSTOMER_PICKUP)
+  fulfillmentStatus FulfillmentStatus @default(PENDING)
+
+  // Delivery information
+  deliveryDate      DateTime?
+  deliveryTimeSlot  String?           // e.g., "9AM-12PM"
+  deliveryAddress   String?           // Override customer address
+  deliveryNotes     String?
+  deliveryRouteId   String?
+  deliveryRoute     DeliveryRoute?    @relation(fields: [deliveryRouteId], references: [id])
+  deliveryStopOrder Int?              // Position in route
+
+  // Third-party pickup/distribution
+  distributorName    String?
+  distributorContact String?
+
+  // Invoice tracking
+  invoiceNumber  String?
+  invoicedAt     DateTime?
+  invoiceDueDate DateTime?
+
+  // Recurring order tracking
+  recurringScheduleId  String?
+  recurringSchedule    RecurringOrderSchedule? @relation(fields: [recurringScheduleId], references: [id])
+  isAutoGenerated      Boolean @default(false)
+  scheduledHarvestDate DateTime?  // The target date from the schedule
+
+  items             OrderItem[]
+  payments          Payment[]
+  deliverySignature DeliverySignature?
+  documents         GeneratedDocument[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -596,6 +708,8 @@ model Order {
   @@unique([farmId, orderNumber])
   @@index([farmId, status])
   @@index([farmId, customerId])
+  @@index([recurringScheduleId])
+  @@index([deliveryRouteId])
 }
 
 enum OrderStatus {
@@ -604,6 +718,32 @@ enum OrderStatus {
   READY
   DELIVERED
   CANCELLED
+}
+
+enum FulfillmentMethod {
+  FARM_DELIVERY      // Farm's own drivers deliver
+  CUSTOMER_PICKUP    // Customer picks up at farm
+  THIRD_PARTY_PICKUP // Distributor/grocery picks up
+  SHIPPING           // Ship via carrier
+  CSA_PICKUP         // CSA member pickup location
+  CSA_DELIVERY       // CSA member home delivery
+  FARMERS_MARKET     // Sold at farmer's market
+}
+
+enum FulfillmentStatus {
+  PENDING           // Not yet ready
+  READY_FOR_PICKUP  // Ready, awaiting pickup
+  OUT_FOR_DELIVERY  // On delivery route
+  DELIVERED         // Completed
+  PICKED_UP         // Customer/distributor picked up
+  FAILED            // Delivery failed
+}
+
+enum PaymentType {
+  PREPAID      // Already paid (CSA, online order)
+  INVOICE      // Bill customer later
+  COD          // Collect on delivery
+  SUBSCRIPTION // Recurring subscription payment
 }
 
 model OrderItem {
@@ -643,6 +783,9 @@ model OrderItem {
   tasks           Task[]
   rackAssignments RackAssignment[]
 
+  // Blend instance (if ordering a blend product)
+  blendInstance   BlendOrderInstance?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -658,6 +801,183 @@ enum OrderItemStatus {
   GROWING
   HARVESTED
   CANCELLED
+}
+
+// ============================================================================
+// RECURRING ORDERS
+// ============================================================================
+
+model RecurringOrderSchedule {
+  id        String   @id @default(cuid())
+  farmId    String
+  farm      Farm     @relation(fields: [farmId], references: [id], onDelete: Cascade)
+
+  name      String              // Display name: "Weekly Restaurant Order"
+  customerId String?
+  customer  Customer?           @relation(fields: [customerId], references: [id])
+
+  // Schedule type
+  scheduleType  RecurrenceType  // FIXED_DAY or INTERVAL
+
+  // For FIXED_DAY: which days of week (0=Sun, 1=Mon, etc.)
+  daysOfWeek    String          @default("[]") // JSON array stored as string for SQLite
+
+  // For INTERVAL: every N days
+  intervalDays  Int?            // e.g., 7 for weekly, 14 for bi-weekly
+
+  // Schedule range
+  startDate     DateTime
+  endDate       DateTime?       // Optional end date
+
+  // How far ahead to generate orders (in days)
+  leadTimeDays  Int             @default(28) // Generate 4 weeks ahead
+
+  // Template items for the recurring order
+  items         RecurringOrderItem[]
+
+  // Orders generated from this schedule
+  generatedOrders Order[]
+
+  // Dates to skip (holidays, vacations)
+  skippedDates  RecurringOrderSkip[]
+
+  isActive      Boolean         @default(true)
+  notes         String?
+
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+
+  @@index([farmId])
+  @@index([farmId, isActive])
+}
+
+enum RecurrenceType {
+  FIXED_DAY   // "Every Tuesday"
+  INTERVAL    // "Every 7 days"
+}
+
+model RecurringOrderItem {
+  id             String   @id @default(cuid())
+  scheduleId     String
+  schedule       RecurringOrderSchedule @relation(fields: [scheduleId], references: [id], onDelete: Cascade)
+
+  productId      String
+  product        Product  @relation(fields: [productId], references: [id])
+
+  quantityOz     Float
+  overagePercent Float    @default(10)
+
+  createdAt      DateTime @default(now())
+
+  @@index([scheduleId])
+}
+
+model RecurringOrderSkip {
+  id         String   @id @default(cuid())
+  scheduleId String
+  schedule   RecurringOrderSchedule @relation(fields: [scheduleId], references: [id], onDelete: Cascade)
+
+  skipDate   DateTime  // The harvest date to skip
+  reason     String?   // "Holiday", "Customer vacation", etc.
+
+  createdAt  DateTime @default(now())
+
+  @@unique([scheduleId, skipDate])
+  @@index([scheduleId])
+}
+
+// ============================================================================
+// BLENDS/MIXES (Composite Products)
+// ============================================================================
+
+model Blend {
+  id          String   @id @default(cuid())
+  farmId      String
+  farm        Farm     @relation(fields: [farmId], references: [id], onDelete: Cascade)
+
+  name        String              // "Spicy Mix", "Spring Blend"
+  description String?
+
+  // A blend IS a product (for pricing, SKUs, ordering)
+  productId   String   @unique
+  product     Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  // Component ingredients with ratios
+  ingredients BlendIngredient[]
+
+  // Track actual production of blends per order item
+  blendInstances BlendOrderInstance[]
+
+  isActive    Boolean @default(true)
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([farmId, name])
+  @@index([farmId])
+}
+
+model BlendIngredient {
+  id           String  @id @default(cuid())
+  blendId      String
+  blend        Blend   @relation(fields: [blendId], references: [id], onDelete: Cascade)
+
+  // The base product (individual microgreen variety)
+  productId    String
+  product      Product @relation("IngredientProduct", fields: [productId], references: [id])
+
+  // Ratio as percentage (all ingredients should sum to 100%)
+  ratioPercent Float   // e.g., 33.3 for 1/3 of the blend
+
+  // Optional: override production timing for this ingredient in this blend
+  overrideDaysSoaking     Int?
+  overrideDaysGermination Int?
+  overrideDaysLight       Int?
+
+  displayOrder Int @default(0)
+
+  @@unique([blendId, productId])
+  @@index([blendId])
+}
+
+// Tracks actual production of blends per order item
+model BlendOrderInstance {
+  id          String    @id @default(cuid())
+  blendId     String
+  blend       Blend     @relation(fields: [blendId], references: [id])
+  orderItemId String    @unique
+  orderItem   OrderItem @relation(fields: [orderItemId], references: [id], onDelete: Cascade)
+
+  // Calculated target quantities per ingredient (stored as JSON)
+  ingredientTargets String  @default("[]") // JSON: [{ productId, targetOz, traysNeeded }]
+
+  // Actual yields recorded per ingredient
+  ingredientYields BlendIngredientYield[]
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([blendId])
+  @@index([orderItemId])
+}
+
+model BlendIngredientYield {
+  id                 String   @id @default(cuid())
+  blendInstanceId    String
+  blendInstance      BlendOrderInstance @relation(fields: [blendInstanceId], references: [id], onDelete: Cascade)
+
+  productId          String
+  product            Product  @relation("IngredientYields", fields: [productId], references: [id])
+
+  targetOz           Float
+  actualYieldOz      Float?
+  traysUsed          Int?
+  harvestedAt        DateTime?
+  harvestedBy        String?
+  notes              String?
+
+  @@unique([blendInstanceId, productId])
+  @@index([blendInstanceId])
 }
 
 // ============================================================================
@@ -692,6 +1012,7 @@ model Employee {
   shifts      Shift[]
   timeEntries TimeEntry[]
   assignments TaskAssignment[]
+  deliveryRoutes DeliveryRoute[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -710,6 +1031,7 @@ enum EmployeePosition {
   FARM_MANAGER
   SALESPERSON
   FARM_OPERATOR
+  DRIVER
 }
 
 enum InviteStatus {
@@ -1170,4 +1492,433 @@ model StripeWebhookEvent {
   processed     Boolean  @default(false)
   error         String?
   createdAt     DateTime @default(now())
+}
+
+// ============================================================================
+// DELIVERY & FULFILLMENT
+// ============================================================================
+
+model DeliveryRoute {
+  id        String   @id @default(cuid())
+  farmId    String
+  farm      Farm     @relation(fields: [farmId], references: [id], onDelete: Cascade)
+
+  name      String              // e.g., "Monday Downtown Route"
+  date      DateTime            // The date of this route
+
+  driverId  String?
+  driver    Employee? @relation(fields: [driverId], references: [id])
+
+  status    RouteStatus @default(PLANNED)
+
+  // Route metrics
+  estimatedDuration Int?        // Minutes
+  estimatedMiles    Float?
+  actualDuration    Int?
+  actualMiles       Float?
+
+  startedAt   DateTime?
+  completedAt DateTime?
+
+  orders      Order[]
+  notes       String?
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([farmId, date])
+  @@index([driverId])
+}
+
+enum RouteStatus {
+  PLANNED
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+model DeliverySignature {
+  id        String   @id @default(cuid())
+  orderId   String   @unique
+  order     Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  signatureData  String      // Base64 encoded signature image
+  signedBy       String      // Name of person who signed
+  signedAt       DateTime    @default(now())
+
+  // GPS location at time of signature (optional)
+  latitude   Float?
+  longitude  Float?
+
+  // Photo proof (optional)
+  photoUrl   String?
+
+  capturedBy String?         // Driver who captured signature
+
+  createdAt  DateTime @default(now())
+}
+
+// ============================================================================
+// DOCUMENT GENERATION
+// ============================================================================
+
+model GeneratedDocument {
+  id        String   @id @default(cuid())
+  farmId    String
+  farm      Farm     @relation(fields: [farmId], references: [id], onDelete: Cascade)
+
+  orderId   String?
+  order     Order?   @relation(fields: [orderId], references: [id])
+
+  type           DocumentType
+  documentNumber String       // INV-2025-001, PS-2025-001, etc.
+
+  fileUrl     String          // Path to generated PDF
+  fileName    String
+
+  generatedAt DateTime @default(now())
+  generatedBy String?         // User who generated it
+
+  // For invoices
+  dueDate     DateTime?
+  sentAt      DateTime?
+  sentTo      String?          // Email address
+
+  createdAt   DateTime @default(now())
+
+  @@index([farmId, type])
+  @@index([orderId])
+}
+
+enum DocumentType {
+  PACKING_SLIP
+  INVOICE
+  DELIVERY_RECEIPT
+  BILL_OF_LADING
+}
+
+// ============================================================================
+// CSA (COMMUNITY SUPPORTED AGRICULTURE)
+// ============================================================================
+
+model CsaProgram {
+  id          String   @id @default(cuid())
+  farmId      String
+  farm        Farm     @relation(fields: [farmId], references: [id], onDelete: Cascade)
+
+  name        String              // "2025 Spring CSA"
+  description String?
+
+  // Season dates
+  startDate   DateTime
+  endDate     DateTime
+
+  // Pickup/delivery settings
+  pickupDay       Int?         // 0=Sunday, 1=Monday, etc.
+  pickupTimeStart String?      // "10:00"
+  pickupTimeEnd   String?      // "14:00"
+
+  status      CsaProgramStatus @default(DRAFT)
+
+  shareTypes      CsaShareType[]
+  members         CsaMember[]
+  weeks           CsaWeek[]
+  pickupLocations CsaPickupLocation[]
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([farmId])
+  @@index([farmId, status])
+}
+
+enum CsaProgramStatus {
+  DRAFT
+  OPEN_ENROLLMENT
+  ACTIVE
+  COMPLETED
+  CANCELLED
+}
+
+model CsaShareType {
+  id          String   @id @default(cuid())
+  programId   String
+  program     CsaProgram @relation(fields: [programId], references: [id], onDelete: Cascade)
+
+  name        String          // "Full Share", "Half Share"
+  description String?
+
+  price       Int             // Total price in cents for the season
+  weeklyPrice Int?            // Optional weekly price for display
+
+  // Quantity limits
+  maxMembers  Int?            // Maximum members for this share type
+
+  members         CsaMember[]
+  weekAllocations CsaWeekAllocation[]
+
+  displayOrder Int @default(0)
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([programId])
+}
+
+model CsaMember {
+  id          String   @id @default(cuid())
+  programId   String
+  program     CsaProgram @relation(fields: [programId], references: [id], onDelete: Cascade)
+
+  customerId  String
+  customer    Customer @relation(fields: [customerId], references: [id])
+
+  shareTypeId String
+  shareType   CsaShareType @relation(fields: [shareTypeId], references: [id])
+
+  // Payment status
+  paymentStatus CsaPaymentStatus @default(PENDING)
+  paidAmount    Int @default(0)    // Amount paid in cents
+  paymentNotes  String?
+
+  // Pickup/delivery preference
+  fulfillmentMethod FulfillmentMethod @default(CSA_PICKUP)
+  pickupLocationId  String?
+  pickupLocation    CsaPickupLocation? @relation(fields: [pickupLocationId], references: [id])
+
+  // Member preferences
+  preferences CsaMemberPreference[]
+
+  // Skipped weeks
+  skippedWeeks CsaMemberSkip[]
+
+  status      CsaMemberStatus @default(ACTIVE)
+  notes       String?
+
+  enrolledAt  DateTime @default(now())
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([programId, customerId])
+  @@index([programId])
+  @@index([customerId])
+}
+
+enum CsaPaymentStatus {
+  PENDING
+  PARTIAL
+  PAID
+  REFUNDED
+}
+
+enum CsaMemberStatus {
+  ACTIVE
+  PAUSED
+  CANCELLED
+}
+
+model CsaMemberPreference {
+  id        String   @id @default(cuid())
+  memberId  String
+  member    CsaMember @relation(fields: [memberId], references: [id], onDelete: Cascade)
+
+  productId String
+  product   Product  @relation(fields: [productId], references: [id])
+
+  preference PreferenceType
+  notes      String?
+
+  @@unique([memberId, productId])
+  @@index([memberId])
+}
+
+enum PreferenceType {
+  LOVE          // Extra if available
+  LIKE          // Normal amount
+  DISLIKE       // Less or none
+  ALLERGY       // Never include
+}
+
+model CsaMemberSkip {
+  id        String   @id @default(cuid())
+  memberId  String
+  member    CsaMember @relation(fields: [memberId], references: [id], onDelete: Cascade)
+
+  weekId    String
+  week      CsaWeek  @relation(fields: [weekId], references: [id])
+
+  reason    String?
+
+  createdAt DateTime @default(now())
+
+  @@unique([memberId, weekId])
+}
+
+model CsaPickupLocation {
+  id          String   @id @default(cuid())
+  programId   String
+  program     CsaProgram @relation(fields: [programId], references: [id], onDelete: Cascade)
+
+  name        String          // "Downtown Pickup"
+  address     String
+
+  pickupDay       Int?        // Override program default
+  pickupTimeStart String?
+  pickupTimeEnd   String?
+
+  contactName  String?
+  contactPhone String?
+
+  notes       String?
+  isActive    Boolean @default(true)
+
+  members     CsaMember[]
+
+  @@index([programId])
+}
+
+model CsaWeek {
+  id          String   @id @default(cuid())
+  programId   String
+  program     CsaProgram @relation(fields: [programId], references: [id], onDelete: Cascade)
+
+  weekNumber  Int             // 1, 2, 3, etc.
+  weekDate    DateTime        // The pickup/delivery date
+
+  status      CsaWeekStatus @default(PLANNING)
+
+  allocations  CsaWeekAllocation[]
+  skipRequests CsaMemberSkip[]
+
+  notes       String?
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([programId, weekNumber])
+  @@index([programId])
+}
+
+enum CsaWeekStatus {
+  PLANNING      // Still planning contents
+  FINALIZED     // Contents locked
+  DISTRIBUTED   // Boxes distributed
+}
+
+model CsaWeekAllocation {
+  id          String   @id @default(cuid())
+  weekId      String
+  week        CsaWeek  @relation(fields: [weekId], references: [id], onDelete: Cascade)
+
+  shareTypeId String
+  shareType   CsaShareType @relation(fields: [shareTypeId], references: [id])
+
+  productId   String
+  product     Product  @relation(fields: [productId], references: [id])
+
+  quantityOz  Float           // Amount in ounces
+
+  @@unique([weekId, shareTypeId, productId])
+  @@index([weekId])
+}
+
+// ============================================================================
+// SUPPLIES INVENTORY (Seeds, Grow Media, etc.)
+// ============================================================================
+
+model SupplyCategory {
+  id        String   @id @default(cuid())
+  farmId    String
+  farm      Farm     @relation(fields: [farmId], references: [id], onDelete: Cascade)
+
+  name      String   // "Seeds", "Grow Media", "Packaging", "Nutrients", etc.
+  sortOrder Int      @default(0)
+
+  supplies  Supply[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([farmId, name])
+  @@index([farmId])
+}
+
+model Supply {
+  id         String         @id @default(cuid())
+  farmId     String
+  farm       Farm           @relation(fields: [farmId], references: [id], onDelete: Cascade)
+  categoryId String
+  category   SupplyCategory @relation(fields: [categoryId], references: [id])
+
+  name String  // "Sunflower Seeds", "BioStrate Sheets", etc.
+  sku  String? // Optional internal SKU
+
+  // For seeds - link to variety
+  productId String?  // Links to Product (variety) for seeds
+  product   Product? @relation("SeedProduct", fields: [productId], references: [id])
+
+  // Inventory tracking
+  unit         String?           // Base unit for this supply (g, lb, sheets, etc.)
+  currentStock Decimal @default(0) // Current inventory level
+
+  isActive Boolean @default(true)
+
+  purchases SupplyPurchase[]
+  usageLogs SupplyUsage[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([farmId, name])
+  @@index([farmId])
+  @@index([categoryId])
+  @@index([productId])
+}
+
+model SupplyPurchase {
+  id       String @id @default(cuid())
+  supplyId String
+  supply   Supply @relation(fields: [supplyId], references: [id], onDelete: Cascade)
+
+  quantity  Decimal // Amount received
+  unit      String  // "g", "oz", "lb", "sheets", "bags", etc.
+  unitCost  Int     // Cost per unit in cents
+  totalCost Int     // Total cost in cents
+
+  supplier     String? // Supplier name
+  lotNumber    String? // Lot/batch number for traceability
+  purchaseDate DateTime @default(now())
+  expiryDate   DateTime?
+  notes        String?
+
+  receivedBy String? // Who received it
+
+  createdAt DateTime @default(now())
+
+  @@index([supplyId])
+  @@index([lotNumber])
+}
+
+model SupplyUsage {
+  id       String @id @default(cuid())
+  supplyId String
+  supply   Supply @relation(fields: [supplyId], references: [id], onDelete: Cascade)
+
+  quantity  Decimal // Amount used
+  usageType String  // "PRODUCTION", "ADJUSTMENT", "WASTE", "OTHER"
+
+  // Link to production (optional)
+  taskId      String? // Links to Task (SEED task)
+  orderItemId String? // Links to OrderItem
+
+  lotNumber  String? // Which lot was used
+  notes      String?
+  recordedBy String?
+  usageDate  DateTime @default(now())
+
+  createdAt DateTime @default(now())
+
+  @@index([supplyId])
+  @@index([taskId])
+  @@index([usageDate])
 }

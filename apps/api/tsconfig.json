@@ -11,6 +11,7 @@
     "rootDir": "./src",
     "resolveJsonModule": true,
     "declaration": true,
+    "jsx": "react-jsx",
     "paths": {
       "@/*": ["./src/*"]
     }

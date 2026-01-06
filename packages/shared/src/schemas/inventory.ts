@@ -28,6 +28,9 @@ export const ProductSchema = z.object({
   daysLight: z.number().int().nonnegative().nullable(),
   avgYieldPerTray: z.number().positive().nullable(),
 
+  // Blend flag - indicates this product is a composite blend
+  isBlend: z.boolean().optional(),
+
   unitCost: z.number().nonnegative().nullable(),
   unitPrice: z.number().nonnegative().nullable(),
   createdAt: z.date(),

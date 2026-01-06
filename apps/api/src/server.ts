@@ -14,6 +14,15 @@ import skusRoutes from './modules/skus/skus.routes.js';
 import customersRoutes from './modules/customers/customers.routes.js';
 import storefrontRoutes from './modules/storefront/storefront.routes.js';
 import employeesRoutes from './modules/employees/employees.routes.js';
+import recurringOrdersRoutes from './modules/recurring-orders/recurring-orders.routes.js';
+import blendsRoutes from './modules/blends/blends.routes.js';
+import deliveryRoutes from './modules/delivery/delivery.routes.js';
+import documentsRoutes from './modules/documents/documents.routes.js';
+import csaRoutes from './modules/csa/csa.routes.js';
+import packageTypesRoutes from './modules/package-types/package-types.routes.js';
+import suppliesRoutes from './modules/supplies/supplies.routes.js';
+import { startRecurringOrderGenerator } from './services/recurring-order-generator.js';
+import { prisma } from './lib/prisma.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -70,6 +79,16 @@ await fastify.register(skusRoutes, { prefix: '/api/v1' });
 await fastify.register(customersRoutes, { prefix: '/api/v1' });
 await fastify.register(storefrontRoutes, { prefix: '/api/v1' });
 await fastify.register(employeesRoutes, { prefix: '/api/v1' });
+await fastify.register(recurringOrdersRoutes, { prefix: '/api/v1' });
+await fastify.register(blendsRoutes, { prefix: '/api/v1' });
+await fastify.register(deliveryRoutes, { prefix: '/api/v1' });
+await fastify.register(documentsRoutes, { prefix: '/api/v1' });
+await fastify.register(csaRoutes, { prefix: '/api/v1' });
+await fastify.register(packageTypesRoutes, { prefix: '/api/v1' });
+await fastify.register(suppliesRoutes, { prefix: '/api/v1' });
+
+// Export for external use
+export { fastify as app };
 
 // Start server
 const start = async () => {
@@ -87,6 +106,9 @@ const start = async () => {
    Health:  http://localhost:${port}/health
    API:     http://localhost:${port}/api/v1
 `);
+
+    // Start recurring order generator (runs immediately and then hourly)
+    startRecurringOrderGenerator(prisma);
   } catch (err) {
     fastify.log.error(err);
     process.exit(1);

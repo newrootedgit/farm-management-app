@@ -18,6 +18,21 @@ export const FarmSchema = z.object({
   brandColor: z.string().nullable().optional(),
   weightUnit: WeightUnitSchema.default('oz'),
   lengthUnit: LengthUnitSchema.default('in'),
+  // Contact Information (for document headers)
+  phone: z.string().nullable().optional(),
+  email: z.string().email().nullable().optional(),
+  website: z.string().url().nullable().optional(),
+  // Business Address
+  addressLine1: z.string().nullable().optional(),
+  addressLine2: z.string().nullable().optional(),
+  city: z.string().nullable().optional(),
+  state: z.string().nullable().optional(),
+  postalCode: z.string().nullable().optional(),
+  country: z.string().default('US'),
+  // Document Settings
+  invoicePrefix: z.string().default('INV'),
+  nextInvoiceNumber: z.number().int().positive().default(1),
+  invoiceFooterNotes: z.string().nullable().optional(),
   createdAt: z.date(),
   updatedAt: z.date(),
 });
@@ -29,9 +44,25 @@ export const CreateFarmSchema = z.object({
   currency: z.string().optional(),
   weightUnit: WeightUnitSchema.optional(),
   lengthUnit: LengthUnitSchema.optional(),
+  // Contact Information
+  phone: z.string().optional(),
+  email: z.string().email().optional(),
+  website: z.string().url().optional(),
+  // Business Address
+  addressLine1: z.string().optional(),
+  addressLine2: z.string().optional(),
+  city: z.string().optional(),
+  state: z.string().optional(),
+  postalCode: z.string().optional(),
+  country: z.string().optional(),
 });
 
-export const UpdateFarmSchema = CreateFarmSchema.partial();
+export const UpdateFarmSchema = CreateFarmSchema.partial().extend({
+  // Document settings (admin-only in production)
+  invoicePrefix: z.string().min(1).max(10).optional(),
+  nextInvoiceNumber: z.number().int().positive().optional(),
+  invoiceFooterNotes: z.string().nullable().optional(),
+});
 
 // Company schemas
 export const CompanySchema = z.object({

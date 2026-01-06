@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 // Employee position types
-export const EmployeePositionSchema = z.enum(['FARM_MANAGER', 'SALESPERSON', 'FARM_OPERATOR']);
+export const EmployeePositionSchema = z.enum(['ADMIN', 'FARM_MANAGER', 'SALESPERSON', 'FARM_OPERATOR', 'DRIVER']);
 export type EmployeePosition = z.infer<typeof EmployeePositionSchema>;
 
 // Employee status

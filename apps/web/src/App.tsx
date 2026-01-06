@@ -3,7 +3,6 @@ import { AppShell } from './components/layout';
 import { useUserStore } from './stores/user-store';
 import Dashboard from './pages/Dashboard';
 import FarmLayout from './pages/FarmLayout';
-import ZonesPage from './pages/ZonesPage';
 import InventoryPage from './pages/InventoryPage';
 import EmployeesPage from './pages/EmployeesPage';
 import PlanningPage from './pages/PlanningPage';
@@ -18,6 +17,10 @@ import StorePage from './pages/StorePage';
 import LoginPage from './pages/LoginPage';
 import UserSettingsPage from './pages/UserSettingsPage';
 import AcceptInvitePage from './pages/AcceptInvitePage';
+import DeliveryPage from './pages/DeliveryPage';
+import DriverPage from './pages/DriverPage';
+import CsaPage from './pages/CsaPage';
+import SuppliesPage from './pages/SuppliesPage';
 
 // Protected route wrapper
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -39,6 +42,16 @@ function App() {
       <Route path="/pay/:linkId" element={<CheckoutPage />} />
       <Route path="/order/:farmSlug" element={<StorefrontPage />} />
 
+      {/* Driver mobile view (protected, no AppShell for mobile-first UX) */}
+      <Route
+        path="/driver"
+        element={
+          <ProtectedRoute>
+            <DriverPage />
+          </ProtectedRoute>
+        }
+      />
+
       {/* Protected app routes with shell */}
       <Route
         path="/*"
@@ -50,11 +63,13 @@ function App() {
                 <Route path="/operations" element={<OperationsPage />} />
                 <Route path="/planning" element={<PlanningPage />} />
                 <Route path="/layout" element={<FarmLayout />} />
-                <Route path="/zones" element={<ZonesPage />} />
                 <Route path="/inventory" element={<InventoryPage />} />
+                <Route path="/supplies" element={<SuppliesPage />} />
                 <Route path="/customers" element={<CustomersPage />} />
                 <Route path="/store" element={<StorePage />} />
-                <Route path="/employees" element={<EmployeesPage />} />
+                <Route path="/delivery" element={<DeliveryPage />} />
+                <Route path="/csa" element={<CsaPage />} />
+                <Route path="/team" element={<EmployeesPage />} />
                 <Route path="/financials" element={<FinancialsPage />} />
                 <Route path="/wiki" element={<WikiPage />} />
                 <Route path="/settings" element={<SettingsPage />} />
