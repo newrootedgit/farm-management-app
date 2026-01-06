@@ -11,6 +11,17 @@ import {
 import { DEFAULT_ELEMENT_COLORS, DEFAULT_ELEMENT_DIMENSIONS } from '@farm/shared';
 import type { UnitSystem, ElementPreset } from '@farm/shared';
 import { getGridSizeForUnit, getUnitLabel } from '@/lib/units';
+import type { RackAssignment } from '@/lib/api-client';
+
+// Calculate font size that fits text within a given width
+function calculateFitFontSize(text: string, maxWidth: number, maxFontSize: number = 14, minFontSize: number = 8): number {
+  // Approximate character width as 0.6 of font size (for sans-serif bold)
+  const charWidthRatio = 0.6;
+  const estimatedWidth = text.length * maxFontSize * charWidthRatio;
+  if (estimatedWidth <= maxWidth) return maxFontSize;
+  const scaledSize = maxWidth / (text.length * charWidthRatio);
+  return Math.max(minFontSize, Math.min(maxFontSize, scaledSize));
+}
 
 // Format distance in the appropriate unit (convert from cm to feet or meters)
 function formatDistance(distanceCm: number, unitSystem: UnitSystem): string {
@@ -37,6 +48,7 @@ interface FarmCanvasProps {
   height: number;
   unitSystem?: UnitSystem;
   presets?: ElementPreset[];
+  rackAssignments?: RackAssignment[];
   onElementSelect?: (element: CanvasElement | null) => void;
   onMultiSelect?: (elements: CanvasElement[]) => void;
   onOpenWallModal?: (startPoint: { x: number; y: number }) => void;
@@ -47,6 +59,7 @@ export function FarmCanvas({
   height,
   unitSystem = 'FEET',
   presets = [],
+  rackAssignments = [],
   onElementSelect,
   onMultiSelect,
   onOpenWallModal,
@@ -85,6 +98,7 @@ export function FarmCanvas({
     addMeasurePoint,
     clearMeasure,
     pushHistory,
+    isEditMode,
   } = useCanvasStore();
 
   // Marquee selection state
@@ -479,8 +493,8 @@ export function FarmCanvas({
       const scaledPos = getScaledPos();
       const snappedPos = snapPosition(scaledPos);
 
-      if (activeTool === 'wall') {
-        // Wall drawing - first click sets start point
+      if (activeTool === 'wall' && isEditMode) {
+        // Wall drawing - first click sets start point (only in edit mode)
         if (!wallDrawing.startPoint) {
           setWallStartPoint(snappedPos);
           setWallIsDrawing(true);
@@ -491,7 +505,7 @@ export function FarmCanvas({
             endY: snappedPos.y,
           });
         }
-      } else if (activeTool === 'element' && activeElementType === 'WALKWAY') {
+      } else if (activeTool === 'element' && activeElementType === 'WALKWAY' && isEditMode) {
         // Walkway drawing - like walls, click-drag to draw a line
         if (!walkwayDrawing.startPoint) {
           setWalkwayStartPoint(snappedPos);
@@ -503,7 +517,7 @@ export function FarmCanvas({
             endY: snappedPos.y,
           });
         }
-      } else if (activeTool === 'element' && activeElementType && activeElementType !== 'WALL' && activeElementType !== 'WALKWAY') {
+      } else if (activeTool === 'element' && activeElementType && activeElementType !== 'WALL' && activeElementType !== 'WALKWAY' && isEditMode) {
         // Place rectangle element - use preset data if available
         const activePreset = activePresetId ? presets.find((p) => p.id === activePresetId) : null;
         const defaults =
@@ -625,6 +639,7 @@ export function FarmCanvas({
       findWallAtPosition,
       showNotification,
       clearMeasure,
+      isEditMode,
     ]
   );
 
@@ -1280,7 +1295,7 @@ export function FarmCanvas({
             lineCap="round"
             lineJoin="round"
             hitStrokeWidth={Math.max(thickness, 20)}
-            draggable={activeTool === 'select'}
+            draggable={isEditMode && activeTool === 'select'}
             onDragStart={() => handleDragStart(element.id)}
             onDragMove={(e) => {
               const node = e.target;
@@ -1308,8 +1323,8 @@ export function FarmCanvas({
             }}
           />
         ))}
-        {/* Draggable endpoint handles when selected */}
-        {isSelected && (
+        {/* Draggable endpoint handles when selected (edit mode only) */}
+        {isEditMode && isSelected && (
           <>
             {/* Start point handle */}
             <Circle
@@ -1501,7 +1516,7 @@ export function FarmCanvas({
         x={element.x ?? 0}
         y={element.y ?? 0}
         rotation={element.rotation ?? 0}
-        draggable={activeTool === 'select'}
+        draggable={isEditMode && activeTool === 'select'}
         onMouseDown={(e) => {
           e.cancelBubble = true;
         }}
@@ -1632,7 +1647,7 @@ export function FarmCanvas({
           opacity={element.opacity}
           cornerRadius={4}
           hitStrokeWidth={Math.max(thickness, 20)}
-          draggable={activeTool === 'select'}
+          draggable={isEditMode && activeTool === 'select'}
           onDragStart={() => handleDragStart(element.id)}
           onDragMove={(e) => {
             const node = e.target;
@@ -1726,8 +1741,8 @@ export function FarmCanvas({
           strokeWidth={isSelected ? 2 : 1}
           listening={false}
         />
-        {/* Endpoint handles when selected */}
-        {isSelected && (
+        {/* Endpoint handles when selected (edit mode only) */}
+        {isEditMode && isSelected && (
           <>
             {/* Start point handle */}
             <Circle
@@ -1848,7 +1863,7 @@ export function FarmCanvas({
         width={elementWidth}
         height={elementHeight}
         rotation={element.rotation ?? 0}
-        draggable={activeTool === 'select'}
+        draggable={isEditMode && activeTool === 'select'}
         ref={(node) => {
           // Store ref in map for multi-select transformer support
           if (node) {
@@ -1904,76 +1919,154 @@ export function FarmCanvas({
             cornerRadius={element.type === 'WALKWAY' ? 2 : 4}
           />
         )}
-        {/* Element name - clipped to element width */}
-        <Text
-          text={element.name}
-          x={4}
-          y={4}
-          width={elementWidth - 8}
-          fontSize={Math.min(12, elementHeight / 3)}
-          fontStyle="bold"
-          fill="#fff"
-          shadowColor="#000"
-          shadowBlur={2}
-          shadowOpacity={0.5}
-          ellipsis={true}
-        />
-        {/* Grow rack specific: show levels and capacity */}
+        {/* Element name - for GROW_RACK in view mode, center and auto-scale; otherwise top-left */}
+        {isGrowRack && !isEditMode ? (
+          <Text
+            text={element.name}
+            x={4}
+            y={4}
+            width={elementWidth - 8}
+            height={elementHeight - 30}
+            fontSize={calculateFitFontSize(element.name, elementWidth - 16, 16, 9)}
+            fontStyle="bold"
+            fill="#fff"
+            shadowColor="#000"
+            shadowBlur={3}
+            shadowOpacity={0.7}
+            align="center"
+            verticalAlign="middle"
+            wrap="none"
+            ellipsis={true}
+          />
+        ) : (
+          <Text
+            text={element.name}
+            x={4}
+            y={4}
+            width={elementWidth - 8}
+            fontSize={Math.min(12, elementHeight / 3)}
+            fontStyle="bold"
+            fill="#fff"
+            shadowColor="#000"
+            shadowBlur={2}
+            shadowOpacity={0.5}
+            ellipsis={true}
+          />
+        )}
+        {/* Grow rack specific: show levels and capacity in edit mode, RackOverlay in view mode */}
         {isGrowRack && (
           <>
-            {/* Level indicator lines */}
-            {levels > 1 && Array.from({ length: levels - 1 }).map((_, i) => (
-              <Line
-                key={`level-${i}`}
-                points={[
-                  4,
-                  (elementHeight / levels) * (i + 1),
-                  elementWidth - 4,
-                  (elementHeight / levels) * (i + 1),
-                ]}
-                stroke="rgba(255,255,255,0.4)"
-                strokeWidth={1}
-                dash={[4, 2]}
-              />
-            ))}
-            {/* Capacity badge */}
-            <Group x={elementWidth - 4} y={elementHeight - 4}>
-              <Rect
-                x={-40}
-                y={-18}
-                width={40}
-                height={18}
-                fill="rgba(0,0,0,0.7)"
-                cornerRadius={3}
-              />
-              <Text
-                text={`${trayCapacity} 🌱`}
-                x={-38}
-                y={-15}
-                fontSize={11}
-                fill="#fff"
-              />
-            </Group>
-            {/* Levels badge (top right) */}
-            {levels > 1 && (
-              <Group x={elementWidth - 4} y={4}>
-                <Rect
-                  x={-28}
-                  y={0}
-                  width={28}
-                  height={16}
-                  fill="rgba(0,0,0,0.6)"
-                  cornerRadius={3}
-                />
-                <Text
-                  text={`${levels}L`}
-                  x={-24}
-                  y={2}
-                  fontSize={10}
-                  fill="#fff"
-                />
-              </Group>
+            {/* Edit mode: show capacity/level badges */}
+            {isEditMode && (
+              <>
+                {/* Level indicator lines */}
+                {levels > 1 && Array.from({ length: levels - 1 }).map((_, i) => (
+                  <Line
+                    key={`level-${i}`}
+                    points={[
+                      4,
+                      (elementHeight / levels) * (i + 1),
+                      elementWidth - 4,
+                      (elementHeight / levels) * (i + 1),
+                    ]}
+                    stroke="rgba(255,255,255,0.4)"
+                    strokeWidth={1}
+                    dash={[4, 2]}
+                  />
+                ))}
+                {/* Capacity badge */}
+                <Group x={elementWidth - 4} y={elementHeight - 4}>
+                  <Rect
+                    x={-40}
+                    y={-18}
+                    width={40}
+                    height={18}
+                    fill="rgba(0,0,0,0.7)"
+                    cornerRadius={3}
+                  />
+                  <Text
+                    text={`${trayCapacity} 🌱`}
+                    x={-38}
+                    y={-15}
+                    fontSize={11}
+                    fill="#fff"
+                  />
+                </Group>
+                {/* Levels badge (top right) */}
+                {levels > 1 && (
+                  <Group x={elementWidth - 4} y={4}>
+                    <Rect
+                      x={-28}
+                      y={0}
+                      width={28}
+                      height={16}
+                      fill="rgba(0,0,0,0.6)"
+                      cornerRadius={3}
+                    />
+                    <Text
+                      text={`${levels}L`}
+                      x={-24}
+                      y={2}
+                      fontSize={10}
+                      fill="#fff"
+                    />
+                  </Group>
+                )}
+              </>
             )}
+            {/* View mode: clean, simple display with name and tray count */}
+            {!isEditMode && (() => {
+              const rackAssignmentsForThis = rackAssignments.filter(a => a.rackElementId === element.id);
+              const totalOccupied = rackAssignmentsForThis.reduce((sum, a) => sum + a.trayCount, 0);
+              const totalCapacity = levels * (element.metadata?.traysPerLevel ?? 6);
+              const occupancyRatio = totalCapacity > 0 ? totalOccupied / totalCapacity : 0;
+
+              // Color based on occupancy
+              const getBorderColor = () => {
+                if (totalOccupied === 0) return '#6b7280'; // gray for empty
+                if (occupancyRatio >= 1) return '#ef4444'; // red for full
+                if (occupancyRatio >= 0.8) return '#eab308'; // yellow for nearly full
+                return '#22c55e'; // green for has space
+              };
+
+              return (
+                <>
+                  {/* Occupancy border indicator */}
+                  <Rect
+                    x={0}
+                    y={0}
+                    width={elementWidth}
+                    height={elementHeight}
+                    stroke={getBorderColor()}
+                    strokeWidth={3}
+                    cornerRadius={4}
+                    listening={false}
+                  />
+                  {/* Tray count badge at bottom center */}
+                  <Group x={elementWidth / 2} y={elementHeight - 6}>
+                    <Rect
+                      x={-30}
+                      y={-16}
+                      width={60}
+                      height={18}
+                      fill="rgba(0,0,0,0.75)"
+                      cornerRadius={9}
+                    />
+                    <Text
+                      text={`${totalOccupied} trays`}
+                      x={-30}
+                      y={-14}
+                      width={60}
+                      align="center"
+                      fontSize={11}
+                      fontStyle="bold"
+                      fill="#fff"
+                      listening={false}
+                    />
+                  </Group>
+                </>
+              );
+            })()}
           </>
         )}
       </Group>
@@ -2070,8 +2163,8 @@ export function FarmCanvas({
           if (element.type === 'WALKWAY' && element.startX !== undefined) return renderWalkway(element);
           return renderRectElement(element);
         })}
-        {/* Transformer for resize/rotate - exclude walls, doors, grow racks, and line-walkways */}
-        {selectedIds.length > 0 && selectedType === 'element' && selectedIds.some(id => {
+        {/* Transformer for resize/rotate - only in edit mode, exclude walls, doors, grow racks, and line-walkways */}
+        {isEditMode && selectedIds.length > 0 && selectedType === 'element' && selectedIds.some(id => {
           const el = elements.find(e => e.id === id);
           // Exclude walls, doors, grow racks (use properties panel), and line-based walkways (they have custom handles)
           const isLineWalkway = el?.type === 'WALKWAY' && el.startX !== undefined;

@@ -8,20 +8,22 @@ interface ToolButtonProps {
   label: string;
   shortcut: string;
   description: string;
+  disabled?: boolean;
 }
 
-function ToolButton({ tool, icon, label, shortcut, description }: ToolButtonProps) {
+function ToolButton({ tool, icon, label, shortcut, description, disabled }: ToolButtonProps) {
   const { activeTool, setActiveTool } = useCanvasStore();
   const isActive = activeTool === tool;
 
   return (
     <button
       onClick={() => setActiveTool(tool)}
+      disabled={disabled}
       className={`p-2 rounded-md transition-colors ${
         isActive
           ? 'bg-primary text-primary-foreground'
           : 'hover:bg-muted'
-      }`}
+      } ${disabled ? 'opacity-50 cursor-not-allowed' : ''}`}
       title={`${label} (${shortcut})\n${description}`}
       data-tutorial={`tool-${tool}`}
     >
@@ -32,6 +34,7 @@ function ToolButton({ tool, icon, label, shortcut, description }: ToolButtonProp
 
 interface CanvasToolbarProps {
   onSave?: () => void;
+  onCancel?: () => void;
   isSaving?: boolean;
   presets?: ElementPreset[];
   onAddGrowRack?: () => void;
@@ -42,6 +45,7 @@ interface CanvasToolbarProps {
 
 export function CanvasToolbar({
   onSave,
+  onCancel,
   isSaving,
   presets,
   onAddGrowRack,
@@ -50,6 +54,8 @@ export function CanvasToolbar({
   onUnitChange,
 }: CanvasToolbarProps) {
   const {
+    isEditMode,
+    setEditMode,
     showGrid,
     toggleGrid,
     snapToGrid,
@@ -68,11 +74,23 @@ export function CanvasToolbar({
     <div className="flex items-center justify-between border-b bg-card p-2">
       {/* Left: Tools */}
       <div className="flex items-center gap-1">
+        {/* View mode indicator */}
+        {!isEditMode && (
+          <div className="flex items-center gap-2 mr-2 px-2 py-1 bg-muted rounded-md text-sm text-muted-foreground">
+            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+            </svg>
+            View Mode
+          </div>
+        )}
+
+        {/* Select tool - always available but does different things */}
         <ToolButton
           tool="select"
           label="Select"
           shortcut="S"
-          description="Click to select, move, resize, or rotate elements."
+          description={isEditMode ? "Click to select, move, resize, or rotate elements." : "Click to select elements and view details."}
           icon={
             <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 15l-2 5L9 9l11 4-5 2zm0 0l5 5M7.188 2.239l.777 2.897M5.136 7.965l-2.898-.777M13.95 4.05l-2.122 2.122m-5.657 5.656l-2.12 2.122" />
@@ -102,38 +120,43 @@ export function CanvasToolbar({
           }
         />
 
-        <div className="w-px h-6 bg-border mx-2" />
+        {/* Edit mode only: Add Element and Undo/Redo */}
+        {isEditMode && (
+          <>
+            <div className="w-px h-6 bg-border mx-2" />
 
-        {/* Add Element Dropdown */}
-        <AddElementDropdown
-          presets={presets}
-          onAddGrowRack={onAddGrowRack}
-          onManagePresets={onManagePresets}
-        />
+            {/* Add Element Dropdown */}
+            <AddElementDropdown
+              presets={presets}
+              onAddGrowRack={onAddGrowRack}
+              onManagePresets={onManagePresets}
+            />
 
-        <div className="w-px h-6 bg-border mx-2" />
+            <div className="w-px h-6 bg-border mx-2" />
 
-        {/* Undo/Redo */}
-        <button
-          onClick={undo}
-          disabled={!canUndo()}
-          className="p-2 rounded-md hover:bg-muted disabled:opacity-50"
-          title="Undo"
-        >
-          <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
-          </svg>
-        </button>
-        <button
-          onClick={redo}
-          disabled={!canRedo()}
-          className="p-2 rounded-md hover:bg-muted disabled:opacity-50"
-          title="Redo"
-        >
-          <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 10h-10a8 8 0 00-8 8v2M21 10l-6 6m6-6l-6-6" />
-          </svg>
-        </button>
+            {/* Undo/Redo */}
+            <button
+              onClick={undo}
+              disabled={!canUndo()}
+              className="p-2 rounded-md hover:bg-muted disabled:opacity-50"
+              title="Undo"
+            >
+              <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
+              </svg>
+            </button>
+            <button
+              onClick={redo}
+              disabled={!canRedo()}
+              className="p-2 rounded-md hover:bg-muted disabled:opacity-50"
+              title="Redo"
+            >
+              <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 10h-10a8 8 0 00-8 8v2M21 10l-6 6m6-6l-6-6" />
+              </svg>
+            </button>
+          </>
+        )}
       </div>
 
       {/* Center: View options */}
@@ -149,17 +172,21 @@ export function CanvasToolbar({
         >
           Grid {showGrid ? '✓' : ''}
         </button>
-        <button
-          onClick={toggleSnapToGrid}
-          className={`px-3 py-1.5 rounded-md text-sm transition-colors ${
-            snapToGrid
-              ? 'bg-primary/20 text-primary border border-primary/30'
-              : 'hover:bg-muted border border-transparent'
-          }`}
-          title={snapToGrid ? 'Snap to grid enabled (click to disable)' : 'Snap to grid disabled (click to enable)'}
-        >
-          Snap {snapToGrid ? '✓' : ''}
-        </button>
+
+        {/* Snap only shown in edit mode */}
+        {isEditMode && (
+          <button
+            onClick={toggleSnapToGrid}
+            className={`px-3 py-1.5 rounded-md text-sm transition-colors ${
+              snapToGrid
+                ? 'bg-primary/20 text-primary border border-primary/30'
+                : 'hover:bg-muted border border-transparent'
+            }`}
+            title={snapToGrid ? 'Snap to grid enabled (click to disable)' : 'Snap to grid disabled (click to enable)'}
+          >
+            Snap {snapToGrid ? '✓' : ''}
+          </button>
+        )}
 
         {/* Unit selector */}
         {onUnitChange && (
@@ -229,18 +256,38 @@ export function CanvasToolbar({
         </button>
       </div>
 
-      {/* Right: Save */}
+      {/* Right: Edit/Save buttons */}
       <div className="flex items-center gap-2">
-        {isDirty && (
-          <span className="text-sm text-muted-foreground">Unsaved changes</span>
+        {isEditMode ? (
+          <>
+            {isDirty && (
+              <span className="text-sm text-muted-foreground">Unsaved changes</span>
+            )}
+            <button
+              onClick={onCancel}
+              className="px-4 py-1.5 border border-border rounded-md text-sm hover:bg-muted"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={onSave}
+              disabled={!isDirty || isSaving}
+              className="px-4 py-1.5 bg-primary text-primary-foreground rounded-md text-sm disabled:opacity-50"
+            >
+              {isSaving ? 'Saving...' : 'Save Layout'}
+            </button>
+          </>
+        ) : (
+          <button
+            onClick={() => setEditMode(true)}
+            className="flex items-center gap-2 px-4 py-1.5 bg-primary text-primary-foreground rounded-md text-sm"
+          >
+            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+            </svg>
+            Edit Layout
+          </button>
         )}
-        <button
-          onClick={onSave}
-          disabled={!isDirty || isSaving}
-          className="px-4 py-1.5 bg-primary text-primary-foreground rounded-md text-sm disabled:opacity-50"
-        >
-          {isSaving ? 'Saving...' : 'Save Layout'}
-        </button>
       </div>
     </div>
   );

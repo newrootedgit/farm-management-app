@@ -82,6 +82,10 @@ interface HistoryState {
 // ============================================================================
 
 interface CanvasState {
+  // Edit mode state (view mode is default)
+  isEditMode: boolean;
+  setEditMode: (mode: boolean) => void;
+
   // Tool state
   activeTool: CanvasTool;
   setActiveTool: (tool: CanvasTool) => void;
@@ -165,6 +169,12 @@ interface CanvasState {
   // Dirty state
   isDirty: boolean;
   setDirty: (dirty: boolean) => void;
+
+  // Saved state for cancel/revert
+  savedElements: CanvasElement[];
+  savedZones: CanvasZone[];
+  setSavedState: (elements: CanvasElement[], zones: CanvasZone[]) => void;
+  revertToSaved: () => void;
 }
 
 // ============================================================================
@@ -172,6 +182,24 @@ interface CanvasState {
 // ============================================================================
 
 export const useCanvasStore = create<CanvasState>((set, get) => ({
+  // Edit mode state (view mode is default for production safety)
+  isEditMode: false,
+  setEditMode: (mode) => {
+    set({ isEditMode: mode });
+    // When exiting edit mode, clear selection and reset tools
+    if (!mode) {
+      set({
+        selectedIds: [],
+        selectedType: null,
+        activeTool: 'select',
+        activeElementType: null,
+        activePresetId: null,
+      });
+      get().resetWallDrawing();
+      get().resetWalkwayDrawing();
+    }
+  },
+
   // Tool state
   activeTool: 'select',
   setActiveTool: (tool) => {
@@ -498,6 +526,30 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   // Dirty state
   isDirty: false,
   setDirty: (dirty) => set({ isDirty: dirty }),
+
+  // Saved state for cancel/revert
+  savedElements: [],
+  savedZones: [],
+  setSavedState: (elements, zones) => {
+    // Deep clone to prevent mutations from affecting saved state
+    set({
+      savedElements: elements.map(e => ({ ...e, metadata: e.metadata ? { ...e.metadata } : undefined })),
+      savedZones: zones.map(z => ({ ...z })),
+    });
+  },
+  revertToSaved: () => {
+    const { savedElements, savedZones } = get();
+    // Deep clone saved state back to current state
+    set({
+      elements: savedElements.map(e => ({ ...e, metadata: e.metadata ? { ...e.metadata } : undefined })),
+      zones: savedZones.map(z => ({ ...z })),
+      isDirty: false,
+      selectedIds: [],
+      selectedType: null,
+    });
+    // Reset history to the saved state
+    get().resetHistory();
+  },
 }));
 
 // ============================================================================

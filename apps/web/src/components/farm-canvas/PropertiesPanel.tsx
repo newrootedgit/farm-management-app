@@ -2,6 +2,23 @@ import { useState, useEffect } from 'react';
 import { useCanvasStore, CanvasElement, calculateWallLength, calculateWallAngle } from '@/stores/canvas-store';
 import { fromBaseUnit, toBaseUnit, getUnitLabel, calculateEndpoint } from '@/lib/units';
 import type { UnitSystem } from '@farm/shared';
+import type { RackAssignment } from '@/lib/api-client';
+
+// Farm stats interface
+interface FarmStats {
+  totalCapacity: number;
+  inUse: number;
+  rackCount: number;
+}
+
+// Upcoming harvest info
+interface UpcomingHarvest {
+  productName: string;
+  rackName: string;
+  rackId: string;
+  harvestDate: Date;
+  trayCount: number;
+}
 
 // Editable number input that only commits on blur/enter
 function EditableNumberInput({
@@ -151,9 +168,23 @@ interface PropertiesPanelProps {
   unitSystem?: UnitSystem;
   onSaveAsPreset?: (element: CanvasElement) => void;
   onEditGrowRack?: (element: CanvasElement) => void;
+  isEditMode?: boolean;
+  rackAssignments?: RackAssignment[];
+  farmStats?: FarmStats;
+  upcomingHarvests?: UpcomingHarvest[];
 }
 
-export function PropertiesPanel({ element, selectedElements = [], unitSystem = 'FEET', onSaveAsPreset, onEditGrowRack }: PropertiesPanelProps) {
+export function PropertiesPanel({
+  element,
+  selectedElements = [],
+  unitSystem = 'FEET',
+  onSaveAsPreset,
+  onEditGrowRack,
+  isEditMode = true,
+  rackAssignments = [],
+  farmStats,
+  upcomingHarvests = [],
+}: PropertiesPanelProps) {
   const { updateElement, deleteElement, clearSelection, deleteSelectedElements } = useCanvasStore();
 
   // Multiple selection
@@ -199,7 +230,201 @@ export function PropertiesPanel({ element, selectedElements = [], unitSystem = '
     );
   }
 
-  // No selection
+  // VIEW MODE: Farm overview (no selection or non-rack selected)
+  if (!isEditMode && (!element || element.type !== 'GROW_RACK')) {
+    const formatDate = (date: Date) => {
+      const d = new Date(date);
+      const today = new Date();
+      const tomorrow = new Date(today);
+      tomorrow.setDate(tomorrow.getDate() + 1);
+
+      if (d.toDateString() === today.toDateString()) return 'Today';
+      if (d.toDateString() === tomorrow.toDateString()) return 'Tomorrow';
+      return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    };
+
+    return (
+      <div className="w-64 border-l bg-card p-4 space-y-4">
+        <h3 className="font-semibold text-lg">Farm Overview</h3>
+
+        {/* Stats cards */}
+        {farmStats && (
+          <div className="space-y-2">
+            <div className="flex justify-between items-center p-2 bg-muted/50 rounded">
+              <span className="text-sm text-muted-foreground">Total Capacity</span>
+              <span className="font-semibold">{farmStats.totalCapacity} trays</span>
+            </div>
+            <div className="flex justify-between items-center p-2 bg-muted/50 rounded">
+              <span className="text-sm text-muted-foreground">In Use</span>
+              <span className="font-semibold text-emerald-600">
+                {farmStats.inUse} trays
+                {farmStats.totalCapacity > 0 && (
+                  <span className="text-muted-foreground font-normal">
+                    {' '}({Math.round((farmStats.inUse / farmStats.totalCapacity) * 100)}%)
+                  </span>
+                )}
+              </span>
+            </div>
+            <div className="flex justify-between items-center p-2 bg-muted/50 rounded">
+              <span className="text-sm text-muted-foreground">Available</span>
+              <span className="font-semibold">{farmStats.totalCapacity - farmStats.inUse} trays</span>
+            </div>
+            <div className="flex justify-between items-center p-2 bg-muted/50 rounded">
+              <span className="text-sm text-muted-foreground">Grow Racks</span>
+              <span className="font-semibold">{farmStats.rackCount}</span>
+            </div>
+          </div>
+        )}
+
+        {/* Upcoming harvests */}
+        {upcomingHarvests.length > 0 && (
+          <div className="pt-2 border-t">
+            <h4 className="font-medium text-sm mb-2">Upcoming Harvests</h4>
+            <div className="space-y-2">
+              {upcomingHarvests.slice(0, 5).map((harvest, i) => (
+                <div key={i} className="p-2 bg-muted/30 rounded border border-border/50">
+                  <div className="font-medium text-sm">{harvest.productName}</div>
+                  <div className="text-xs text-muted-foreground">{harvest.rackName}</div>
+                  <div className="flex justify-between items-center mt-1">
+                    <span className="text-xs font-medium text-amber-600">
+                      {formatDate(harvest.harvestDate)}
+                    </span>
+                    <span className="text-xs text-muted-foreground">
+                      {harvest.trayCount} trays
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {upcomingHarvests.length === 0 && (
+          <p className="text-sm text-muted-foreground">
+            No upcoming harvests scheduled.
+          </p>
+        )}
+
+        <p className="text-xs text-muted-foreground pt-2">
+          Click on a rack to see what's growing.
+        </p>
+      </div>
+    );
+  }
+
+  // VIEW MODE: Rack details (GROW_RACK selected)
+  if (!isEditMode && element && element.type === 'GROW_RACK') {
+    const levels = element.metadata?.levels ?? 1;
+    const traysPerLevel = element.metadata?.traysPerLevel ?? 6;
+    const totalCapacity = levels * traysPerLevel;
+    const rackAssignmentsForThis = rackAssignments.filter(a => a.rackElementId === element.id);
+    const totalOccupied = rackAssignmentsForThis.reduce((sum, a) => sum + a.trayCount, 0);
+
+    // Group assignments by level
+    const levelData = new Map<number, { trays: number; products: { name: string; harvestDate: Date | null; trayCount: number }[] }>();
+    for (let i = 1; i <= levels; i++) {
+      levelData.set(i, { trays: 0, products: [] });
+    }
+    for (const assignment of rackAssignmentsForThis) {
+      const current = levelData.get(assignment.level);
+      if (current) {
+        current.trays += assignment.trayCount;
+        current.products.push({
+          name: assignment.orderItem?.product?.name ?? 'Unknown',
+          harvestDate: assignment.orderItem?.harvestDate ? new Date(assignment.orderItem.harvestDate) : null,
+          trayCount: assignment.trayCount,
+        });
+      }
+    }
+
+    const formatDate = (date: Date | null) => {
+      if (!date) return 'N/A';
+      const d = new Date(date);
+      const today = new Date();
+      const tomorrow = new Date(today);
+      tomorrow.setDate(tomorrow.getDate() + 1);
+
+      if (d.toDateString() === today.toDateString()) return 'Today';
+      if (d.toDateString() === tomorrow.toDateString()) return 'Tomorrow';
+      return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    };
+
+    return (
+      <div className="w-64 border-l bg-card p-4 space-y-3">
+        <div className="flex items-center justify-between">
+          <h3 className="font-semibold text-lg truncate">{element.name}</h3>
+          <button
+            onClick={() => clearSelection()}
+            className="text-muted-foreground hover:text-foreground text-lg leading-none"
+            title="Close"
+          >
+            ×
+          </button>
+        </div>
+
+        {/* Rack summary */}
+        <div className="p-2 bg-muted/50 rounded space-y-1">
+          <div className="flex justify-between text-sm">
+            <span className="text-muted-foreground">Capacity</span>
+            <span>{levels} levels × {traysPerLevel} trays</span>
+          </div>
+          <div className="flex justify-between text-sm">
+            <span className="text-muted-foreground">Total</span>
+            <span className="font-semibold">{totalCapacity} trays</span>
+          </div>
+          <div className="flex justify-between text-sm">
+            <span className="text-muted-foreground">In Use</span>
+            <span className={`font-semibold ${totalOccupied > 0 ? 'text-emerald-600' : ''}`}>
+              {totalOccupied} trays ({Math.round((totalOccupied / totalCapacity) * 100)}%)
+            </span>
+          </div>
+        </div>
+
+        {/* Level breakdown */}
+        <div className="space-y-2">
+          {Array.from({ length: levels }, (_, i) => levels - i).map((level) => {
+            const data = levelData.get(level);
+            const isTop = level === levels;
+            const isBottom = level === 1;
+
+            return (
+              <div key={level} className="border rounded p-2">
+                <div className="flex justify-between items-center mb-1">
+                  <span className="text-xs font-medium text-muted-foreground">
+                    LEVEL {level} {isTop ? '(top)' : isBottom ? '(bottom)' : ''}
+                  </span>
+                  <span className="text-xs text-muted-foreground">
+                    {data?.trays ?? 0}/{traysPerLevel}
+                  </span>
+                </div>
+                {data && data.products.length > 0 ? (
+                  <div className="space-y-1">
+                    {data.products.map((p, idx) => (
+                      <div key={idx} className="flex justify-between items-center">
+                        <div>
+                          <span className="text-sm font-medium">{p.name}</span>
+                          <span className="text-xs text-muted-foreground ml-1">
+                            ({p.trayCount})
+                          </span>
+                        </div>
+                        <span className="text-xs text-amber-600 font-medium">
+                          {formatDate(p.harvestDate)}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <span className="text-sm text-muted-foreground italic">Empty</span>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }
+
+  // EDIT MODE: No selection
   if (!element) {
   return (
     <div className="w-64 border-l bg-card p-4">
@@ -465,47 +690,107 @@ export function PropertiesPanel({ element, selectedElements = [], unitSystem = '
             </div>
           </div>
 
-          {/* Door specific properties */}
-          {element.type === 'DOOR' && (
-            <div className="space-y-3 p-3 bg-muted/50 rounded-md">
-              <label className="block text-sm font-medium">Door Swing</label>
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <label className="text-xs text-muted-foreground">Hinge Side</label>
-                  <select
-                    value={(element.metadata?.swingDirection as string) ?? 'left'}
-                    onChange={(e) =>
-                      updateElement(element.id, {
-                        metadata: { ...element.metadata, swingDirection: e.target.value },
-                      })
+          {/* Door specific properties - Visual swing selector */}
+          {element.type === 'DOOR' && (() => {
+            const currentHinge = (element.metadata?.swingDirection as string) ?? 'left';
+            const currentSwing = (element.metadata?.swingAngle as string) ?? 'in';
+
+            const doorOptions = [
+              { hinge: 'left', swing: 'in', label: 'L/In' },
+              { hinge: 'right', swing: 'in', label: 'R/In' },
+              { hinge: 'left', swing: 'out', label: 'L/Out' },
+              { hinge: 'right', swing: 'out', label: 'R/Out' },
+            ];
+
+            // SVG Door Icon component
+            const DoorIcon = ({ hinge, swing, size = 40 }: { hinge: string; swing: string; size?: number }) => {
+              const isLeft = hinge === 'left';
+              const isIn = swing === 'in';
+
+              return (
+                <svg width={size} height={size} viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+                  {/* Door frame */}
+                  <rect x="8" y="8" width="24" height="24" stroke="currentColor" strokeWidth="2" fill="none" opacity="0.3" />
+
+                  {/* Door panel */}
+                  <rect
+                    x={isLeft ? "8" : "22"}
+                    y="8"
+                    width="10"
+                    height="24"
+                    fill="currentColor"
+                    opacity="0.6"
+                  />
+
+                  {/* Hinge indicator (circle) */}
+                  <circle
+                    cx={isLeft ? "10" : "30"}
+                    cy="20"
+                    r="3"
+                    fill="currentColor"
+                  />
+
+                  {/* Swing arc arrow */}
+                  <path
+                    d={isLeft
+                      ? (isIn
+                        ? "M 18 12 A 10 10 0 0 1 28 22" // Left hinge, swings inward (clockwise)
+                        : "M 18 28 A 10 10 0 0 0 28 18" // Left hinge, swings outward (counter-clockwise)
+                      )
+                      : (isIn
+                        ? "M 22 12 A 10 10 0 0 0 12 22" // Right hinge, swings inward (counter-clockwise)
+                        : "M 22 28 A 10 10 0 0 1 12 18" // Right hinge, swings outward (clockwise)
+                      )
                     }
-                    className="w-full px-2 py-1.5 border rounded-md bg-background text-sm"
-                  >
-                    <option value="left">Left</option>
-                    <option value="right">Right</option>
-                  </select>
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    fill="none"
+                    strokeDasharray="3 2"
+                    markerEnd="url(#arrowhead)"
+                  />
+
+                  {/* Arrow marker */}
+                  <defs>
+                    <marker id="arrowhead" markerWidth="6" markerHeight="6" refX="3" refY="3" orient="auto">
+                      <polygon points="0 0, 6 3, 0 6" fill="currentColor" />
+                    </marker>
+                  </defs>
+                </svg>
+              );
+            };
+
+            return (
+              <div className="space-y-3 p-3 bg-muted/50 rounded-md">
+                <label className="block text-sm font-medium">Door Swing</label>
+                <div className="grid grid-cols-2 gap-2">
+                  {doorOptions.map((opt) => {
+                    const isSelected = currentHinge === opt.hinge && currentSwing === opt.swing;
+                    return (
+                      <button
+                        key={`${opt.hinge}-${opt.swing}`}
+                        onClick={() =>
+                          updateElement(element.id, {
+                            metadata: { ...element.metadata, swingDirection: opt.hinge, swingAngle: opt.swing },
+                          })
+                        }
+                        className={`flex flex-col items-center p-2 rounded-md border-2 transition-colors ${
+                          isSelected
+                            ? 'border-primary bg-primary/10 text-primary'
+                            : 'border-border hover:border-primary/50 hover:bg-muted'
+                        }`}
+                      >
+                        <DoorIcon hinge={opt.hinge} swing={opt.swing} />
+                        <span className="text-xs mt-1">{opt.label}</span>
+                      </button>
+                    );
+                  })}
                 </div>
-                <div>
-                  <label className="text-xs text-muted-foreground">Swing Direction</label>
-                  <select
-                    value={(element.metadata?.swingAngle as string) ?? 'in'}
-                    onChange={(e) =>
-                      updateElement(element.id, {
-                        metadata: { ...element.metadata, swingAngle: e.target.value },
-                      })
-                    }
-                    className="w-full px-2 py-1.5 border rounded-md bg-background text-sm"
-                  >
-                    <option value="in">Inward</option>
-                    <option value="out">Outward</option>
-                  </select>
-                </div>
+                <p className="text-xs text-muted-foreground">
+                  Select hinge position and swing direction. Dot = hinge.
+                </p>
               </div>
-              <p className="text-xs text-muted-foreground">
-                Position door against a wall and rotate to align.
-              </p>
-            </div>
-          )}
+            );
+          })()}
 
           {/* Grow Rack specific properties */}
           {element.type === 'GROW_RACK' && (

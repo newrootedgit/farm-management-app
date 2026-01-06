@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef, useCallback } from 'react';
+import { useEffect, useState, useRef, useCallback, useMemo } from 'react';
 import { useFarmStore } from '@/stores/farm-store';
 import { useCanvasStore, CanvasElement, generateId } from '@/stores/canvas-store';
 import {
@@ -14,6 +14,7 @@ import {
   useDeleteElementPreset,
   useUserPreferences,
   useUpdateUserPreferences,
+  useRackAssignments,
 } from '@/lib/api-client';
 import { FarmCanvas, CanvasToolbar, PropertiesPanel } from '@/components/farm-canvas';
 import { WallDrawModal } from '@/components/farm-canvas/WallDrawModal';
@@ -30,6 +31,7 @@ export default function FarmLayout() {
   const { data: apiElements, isLoading: elementsLoading } = useLayoutElements(currentFarmId ?? undefined);
   const { data: presets } = useElementPresets(currentFarmId ?? undefined);
   const { data: userPrefs, isLoading: prefsLoading } = useUserPreferences(currentFarmId ?? undefined);
+  const { data: rackAssignments } = useRackAssignments(currentFarmId ?? undefined);
 
   // Mutations
   const updateLayout = useUpdateFarmLayout(currentFarmId ?? '');
@@ -44,6 +46,7 @@ export default function FarmLayout() {
   // Canvas store
   const {
     elements,
+    zones,
     setElements,
     selectedIds,
     selectedType,
@@ -62,6 +65,10 @@ export default function FarmLayout() {
     setActiveTool,
     pushHistory,
     resetHistory,
+    isEditMode,
+    setEditMode,
+    setSavedState,
+    revertToSaved,
   } = useCanvasStore();
 
   // Local state
@@ -112,6 +119,8 @@ export default function FarmLayout() {
         };
       });
       setElements(canvasElements);
+      // Save this state as the "saved" state for cancel/revert functionality
+      setSavedState(canvasElements, []);
       // Initialize history only once on first load
       if (!historyInitializedRef.current) {
         console.log('[FarmLayout] Initializing history on first load');
@@ -121,7 +130,7 @@ export default function FarmLayout() {
         console.log('[FarmLayout] Skipping history init - already initialized');
       }
     }
-  }, [apiElements, setElements, pushHistory]);
+  }, [apiElements, setElements, pushHistory, setSavedState]);
 
   // Sync user preferences
   useEffect(() => {
@@ -200,24 +209,30 @@ export default function FarmLayout() {
         return;
       }
 
-      // Cmd/Ctrl + Z = Undo
+      // Cmd/Ctrl + Z = Undo (only in edit mode)
       if ((e.metaKey || e.ctrlKey) && e.key === 'z' && !e.shiftKey) {
-        e.preventDefault();
-        undo();
+        if (isEditMode) {
+          e.preventDefault();
+          undo();
+        }
         return;
       }
 
-      // Cmd/Ctrl + Shift + Z = Redo
+      // Cmd/Ctrl + Shift + Z = Redo (only in edit mode)
       if ((e.metaKey || e.ctrlKey) && e.key === 'z' && e.shiftKey) {
-        e.preventDefault();
-        redo();
+        if (isEditMode) {
+          e.preventDefault();
+          redo();
+        }
         return;
       }
 
-      // Cmd/Ctrl + Y = Redo (alternative)
+      // Cmd/Ctrl + Y = Redo (alternative, only in edit mode)
       if ((e.metaKey || e.ctrlKey) && e.key === 'y') {
-        e.preventDefault();
-        redo();
+        if (isEditMode) {
+          e.preventDefault();
+          redo();
+        }
         return;
       }
 
@@ -234,9 +249,9 @@ export default function FarmLayout() {
         return;
       }
 
-      // Cmd/Ctrl + V = Paste (pastes all copied elements)
+      // Cmd/Ctrl + V = Paste (pastes all copied elements, only in edit mode)
       if ((e.metaKey || e.ctrlKey) && e.key === 'v') {
-        if (clipboard.length > 0) {
+        if (clipboard.length > 0 && isEditMode) {
           e.preventDefault();
           const offset = 20; // Offset so pasted items are visible
           const newElements: CanvasElement[] = [];
@@ -277,9 +292,10 @@ export default function FarmLayout() {
         return;
       }
 
-      // Cmd/Ctrl + D = Duplicate (copy + paste in one action, duplicates all selected)
+      // Cmd/Ctrl + D = Duplicate (copy + paste in one action, duplicates all selected, only in edit mode)
       if ((e.metaKey || e.ctrlKey) && e.key === 'd') {
         e.preventDefault();
+        if (!isEditMode) return;
         const offset = 20;
 
         if (selectedIds.length > 0 && selectedType === 'element' && selectedElements.length > 0) {
@@ -320,9 +336,9 @@ export default function FarmLayout() {
         return;
       }
 
-      // Delete or Backspace = Delete selected item(s)
+      // Delete or Backspace = Delete selected item(s) (only in edit mode)
       if (e.key === 'Delete' || e.key === 'Backspace') {
-        if (selectedIds.length > 0 && selectedType === 'element') {
+        if (selectedIds.length > 0 && selectedType === 'element' && isEditMode) {
           e.preventDefault();
           deleteSelectedElements();
           setSelectedElement(null);
@@ -380,6 +396,7 @@ export default function FarmLayout() {
     clearSelection,
     resetWallDrawing,
     setActiveTool,
+    isEditMode,
   ]);
 
   // Handle save
@@ -461,6 +478,9 @@ export default function FarmLayout() {
 
       setDirty(false);
 
+      // Update saved state so cancel reverts to this new state
+      setSavedState(elements, zones);
+
       // Reset history so user can't undo past this saved state
       resetHistory();
 
@@ -477,7 +497,48 @@ export default function FarmLayout() {
         isSavingRef.current = false;
       }, 500);
     }
-  }, [currentFarmId, layout, elements, apiElements, updateLayout, createElement, deleteElement, bulkUpdateElements, setDirty, resetHistory]);
+  }, [currentFarmId, layout, elements, zones, apiElements, updateLayout, createElement, deleteElement, bulkUpdateElements, setDirty, resetHistory, setSavedState]);
+
+  // Handle cancel - revert to last saved state
+  const handleCancel = useCallback(() => {
+    revertToSaved();
+    setEditMode(false);
+    clearSelection();
+  }, [revertToSaved, setEditMode, clearSelection]);
+
+  // Calculate farm stats for view mode
+  const farmStats = useMemo(() => {
+    const growRacks = elements.filter(e => e.type === 'GROW_RACK');
+    const totalCapacity = growRacks.reduce((sum, rack) => {
+      const levels = rack.metadata?.levels ?? 1;
+      const traysPerLevel = rack.metadata?.traysPerLevel ?? 6;
+      return sum + (levels * traysPerLevel);
+    }, 0);
+    const inUse = rackAssignments?.reduce((sum, a) => sum + a.trayCount, 0) ?? 0;
+    return { totalCapacity, inUse, rackCount: growRacks.length };
+  }, [elements, rackAssignments]);
+
+  // Calculate upcoming harvests for view mode
+  const upcomingHarvests = useMemo(() => {
+    if (!rackAssignments || rackAssignments.length === 0) return [];
+
+    const harvests = rackAssignments
+      .filter(a => a.orderItem?.harvestDate)
+      .map(a => {
+        const rackElement = elements.find(e => e.id === a.rackElementId);
+        return {
+          productName: a.orderItem?.product?.name ?? 'Unknown',
+          rackName: rackElement?.name ?? 'Unknown Rack',
+          rackId: a.rackElementId,
+          harvestDate: new Date(a.orderItem!.harvestDate!),
+          trayCount: a.trayCount,
+        };
+      })
+      .filter(h => h.harvestDate >= new Date()) // Only future harvests
+      .sort((a, b) => a.harvestDate.getTime() - b.harvestDate.getTime());
+
+    return harvests;
+  }, [rackAssignments, elements]);
 
   // Handle element selection from canvas
   const handleElementSelect = useCallback((element: CanvasElement | null) => {
@@ -589,6 +650,7 @@ export default function FarmLayout() {
       <div className="flex-1 flex flex-col border rounded-lg overflow-hidden bg-card">
         <CanvasToolbar
           onSave={handleSave}
+          onCancel={handleCancel}
           isSaving={updateLayout.isPending || deleteElement.isPending || bulkUpdateElements.isPending}
           presets={presets}
           onAddGrowRack={() => setGrowRackModalOpen(true)}
@@ -605,6 +667,7 @@ export default function FarmLayout() {
               height={canvasSize.height}
               unitSystem={unitSystem}
               presets={presets}
+              rackAssignments={rackAssignments}
               onElementSelect={handleElementSelect}
               onMultiSelect={handleMultiSelect}
               onOpenWallModal={handleOpenWallModal}
@@ -621,6 +684,10 @@ export default function FarmLayout() {
               setEditingGrowRack(element);
               setGrowRackModalOpen(true);
             }}
+            isEditMode={isEditMode}
+            rackAssignments={rackAssignments}
+            farmStats={farmStats}
+            upcomingHarvests={upcomingHarvests}
           />
         </div>
       </div>
