@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { useFarmStore, useUIStore } from '@/stores/farm-store';
 import { useFarms, useFarm, useCreateFarm } from '@/lib/api-client';
@@ -54,6 +54,13 @@ export function Sidebar() {
   const [newFarmName, setNewFarmName] = useState('');
   const [createError, setCreateError] = useState('');
 
+  // Auto-select first farm if none selected but farms exist
+  useEffect(() => {
+    if (!currentFarmId && farms && farms.length > 0) {
+      setCurrentFarm(farms[0].id);
+    }
+  }, [currentFarmId, farms, setCurrentFarm]);
+
   // Get user's role for current farm
   const userRole = (currentFarm?.role as FarmRole) ?? undefined;
 
@@ -103,25 +110,33 @@ export function Sidebar() {
       {/* Farm Selector */}
       <div className="p-4 border-b">
         <label className="text-xs font-medium text-muted-foreground">Current Farm</label>
-        <select
-          value={currentFarmId || ''}
-          onChange={(e) => {
-            if (e.target.value === '__new__') {
-              setShowCreateForm(true);
-            } else {
-              setCurrentFarm(e.target.value || null);
-            }
-          }}
-          className="mt-1 w-full rounded-md border bg-background px-3 py-2 text-sm"
-        >
-          <option value="">Select a farm...</option>
-          {farms?.map((farm) => (
-            <option key={farm.id} value={farm.id}>
-              {farm.name}
-            </option>
-          ))}
-          <option value="__new__">+ Add new farm</option>
-        </select>
+        {farms && farms.length > 0 ? (
+          <select
+            value={currentFarmId || ''}
+            onChange={(e) => {
+              if (e.target.value === '__new__') {
+                setShowCreateForm(true);
+              } else if (e.target.value) {
+                setCurrentFarm(e.target.value);
+              }
+            }}
+            className="mt-1 w-full rounded-md border bg-background px-3 py-2 text-sm"
+          >
+            {farms.map((farm) => (
+              <option key={farm.id} value={farm.id}>
+                {farm.name}
+              </option>
+            ))}
+            <option value="__new__">+ Add new farm</option>
+          </select>
+        ) : (
+          <button
+            onClick={() => setShowCreateForm(true)}
+            className="mt-1 w-full rounded-md border bg-background px-3 py-2 text-sm text-left hover:bg-accent"
+          >
+            + Create farm
+          </button>
+        )}
 
         {/* Inline Create Form */}
         {showCreateForm && (
