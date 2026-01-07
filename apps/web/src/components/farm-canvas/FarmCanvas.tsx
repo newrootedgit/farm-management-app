@@ -1728,7 +1728,6 @@ export function FarmCanvas({
           fill={element.color}
           opacity={element.opacity}
           cornerRadius={4}
-          hitStrokeWidth={Math.max(thickness, 20)}
           draggable={isEditMode && activeTool === 'select'}
           onDragStart={() => handleDragStart(element.id)}
           onDragMove={(e) => {
@@ -1790,6 +1789,8 @@ export function FarmCanvas({
                 endX: endX + actualDx,
                 endY: endY + actualDy,
               });
+              // Push history AFTER making changes (so history contains the new state)
+              pushHistory();
             }
             setDistanceGuides([]);
           }}
@@ -1860,6 +1861,7 @@ export function FarmCanvas({
                   startX: snapped.x,
                   startY: snapped.y,
                 });
+                pushHistory();
                 node.x(0);
                 node.y(0);
               }}
@@ -1905,6 +1907,7 @@ export function FarmCanvas({
                   endX: snapped.x,
                   endY: snapped.y,
                 });
+                pushHistory();
                 // Recalculate new length for handle position
                 const newLength = Math.sqrt(
                   Math.pow(snapped.x - startX, 2) + Math.pow(snapped.y - startY, 2)
