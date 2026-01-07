@@ -230,8 +230,8 @@ export function PropertiesPanel({
     );
   }
 
-  // VIEW MODE: Farm overview (no selection or non-rack selected)
-  if (!isEditMode && (!element || element.type !== 'GROW_RACK')) {
+  // VIEW MODE: Farm overview (no selection)
+  if (!isEditMode && !element) {
     const formatDate = (date: Date) => {
       const d = new Date(date);
       const today = new Date();
@@ -420,6 +420,80 @@ export function PropertiesPanel({
             );
           })}
         </div>
+      </div>
+    );
+  }
+
+  // VIEW MODE: Other element details (non-GROW_RACK)
+  if (!isEditMode && element && element.type !== 'GROW_RACK') {
+    const isWall = element.type === 'WALL';
+    const isLineBasedWalkway = element.type === 'WALKWAY' && element.startX !== undefined;
+    const isLineElement = isWall || isLineBasedWalkway;
+    const lineLength = isLineElement ? calculateWallLength(element) : 0;
+    const unit = getUnitLabel(unitSystem);
+
+    return (
+      <div className="w-64 border-l bg-card p-4 space-y-4">
+        <div className="flex items-center justify-between">
+          <h3 className="font-semibold text-lg truncate">{element.name}</h3>
+          <button
+            onClick={() => clearSelection()}
+            className="text-muted-foreground hover:text-foreground text-lg leading-none"
+            title="Close"
+          >
+            ×
+          </button>
+        </div>
+
+        <span className="inline-block text-xs px-2 py-1 bg-secondary rounded">
+          {element.type.replace('_', ' ')}
+        </span>
+
+        {/* Element info */}
+        <div className="space-y-2">
+          {isLineElement ? (
+            <>
+              <div className="flex justify-between items-center p-2 bg-muted/50 rounded">
+                <span className="text-sm text-muted-foreground">Length</span>
+                <span className="font-semibold">{fromBaseUnit(lineLength, unitSystem).toFixed(1)} {unit}</span>
+              </div>
+              <div className="flex justify-between items-center p-2 bg-muted/50 rounded">
+                <span className="text-sm text-muted-foreground">{isLineBasedWalkway ? 'Width' : 'Thickness'}</span>
+                <span className="font-semibold">{fromBaseUnit(element.thickness ?? 10, unitSystem).toFixed(1)} {unit}</span>
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="flex justify-between items-center p-2 bg-muted/50 rounded">
+                <span className="text-sm text-muted-foreground">Width</span>
+                <span className="font-semibold">{fromBaseUnit(element.width ?? 100, unitSystem).toFixed(1)} {unit}</span>
+              </div>
+              <div className="flex justify-between items-center p-2 bg-muted/50 rounded">
+                <span className="text-sm text-muted-foreground">Length</span>
+                <span className="font-semibold">{fromBaseUnit(element.height ?? 60, unitSystem).toFixed(1)} {unit}</span>
+              </div>
+              {element.rotation !== undefined && element.rotation !== 0 && (
+                <div className="flex justify-between items-center p-2 bg-muted/50 rounded">
+                  <span className="text-sm text-muted-foreground">Rotation</span>
+                  <span className="font-semibold">{Math.round(element.rotation)}°</span>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+
+        {/* Color indicator */}
+        <div className="flex items-center gap-2">
+          <div
+            className="w-6 h-6 rounded border"
+            style={{ backgroundColor: element.color }}
+          />
+          <span className="text-sm text-muted-foreground">Element color</span>
+        </div>
+
+        <p className="text-xs text-muted-foreground pt-2">
+          Switch to Edit mode to modify this element.
+        </p>
       </div>
     );
   }

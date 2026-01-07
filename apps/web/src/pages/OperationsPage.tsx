@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useCallback } from 'react';
 import { useFarmStore } from '@/stores/farm-store';
 import { useTasks, useCompleteTask, useCreateRackAssignment } from '@/lib/api-client';
 import TaskCalendar from '@/components/operations/TaskCalendar';
@@ -6,6 +6,7 @@ import SeedingView from '@/components/operations/SeedingView';
 import TransplantView from '@/components/operations/TransplantView';
 import HarvestView from '@/components/operations/HarvestView';
 import { RackSelector, type RackAllocation } from '@/components/operations/RackSelector';
+import { BulkActionBar, type BulkCompleteData } from '@/components/operations/BulkActionBar';
 import type { Task } from '@farm/shared';
 
 type ViewMode = 'all' | 'calendar' | 'seeding' | 'transplant' | 'harvest';
@@ -47,6 +48,8 @@ export default function OperationsPage() {
   const [logForm, setLogForm] = useState<TaskLogFormData>(getDefaultFormData());
   const [logError, setLogError] = useState<string | null>(null);
   const [showCompleted, setShowCompleted] = useState(false);
+  const [selectedTaskIds, setSelectedTaskIds] = useState<Set<string>>(new Set());
+  const [isBulkCompleting, setIsBulkCompleting] = useState(false);
 
   if (!currentFarmId) {
     return (
@@ -261,9 +264,66 @@ export default function OperationsPage() {
     return due >= today && due <= weekEnd;
   }).length ?? 0;
 
+  // Get selected tasks as array
+  const selectedTasks = useMemo(() => {
+    if (!tasks) return [];
+    return tasks.filter((t) => selectedTaskIds.has(t.id) && t.status !== 'COMPLETED');
+  }, [tasks, selectedTaskIds]);
+
+  // Toggle task selection
+  const toggleTaskSelection = useCallback((taskId: string, e?: React.MouseEvent) => {
+    if (e) {
+      e.stopPropagation();
+    }
+    setSelectedTaskIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(taskId)) {
+        next.delete(taskId);
+      } else {
+        next.add(taskId);
+      }
+      return next;
+    });
+  }, []);
+
+  // Clear all selections
+  const clearSelection = useCallback(() => {
+    setSelectedTaskIds(new Set());
+  }, []);
+
+  // Handle bulk complete
+  const handleBulkComplete = useCallback(async (data: BulkCompleteData) => {
+    if (selectedTasks.length === 0) return;
+
+    setIsBulkCompleting(true);
+    const completedAt = new Date(`${data.completedDate}T${data.completedTime}`);
+
+    try {
+      // Complete all selected tasks in parallel
+      await Promise.all(
+        selectedTasks.map((task) =>
+          completeTask.mutateAsync({
+            taskId: task.id,
+            data: {
+              completedBy: data.completedBy.trim(),
+              completionNotes: data.completionNotes?.trim() || undefined,
+              completedAt: completedAt.toISOString(),
+            },
+          })
+        )
+      );
+
+      // Clear selection after successful completion
+      clearSelection();
+    } finally {
+      setIsBulkCompleting(false);
+    }
+  }, [selectedTasks, completeTask, clearSelection]);
+
   const renderTaskCard = (task: Task) => {
     const typeInfo = getTaskTypeInfo(task.type);
     const isCompleted = task.status === 'COMPLETED';
+    const isSelected = selectedTaskIds.has(task.id);
 
     return (
       <div
@@ -271,9 +331,24 @@ export default function OperationsPage() {
         onClick={() => !isCompleted && handleOpenLog(task)}
         className={`border rounded-lg p-4 bg-card transition-all ${
           isCompleted ? 'opacity-60' : 'hover:border-primary hover:shadow-md cursor-pointer'
-        }`}
+        } ${isSelected ? 'ring-2 ring-primary border-primary' : ''}`}
       >
         <div className="flex items-start gap-4">
+          {/* Selection Checkbox */}
+          {!isCompleted && (
+            <div
+              onClick={(e) => toggleTaskSelection(task.id, e)}
+              className="flex items-center justify-center w-6 h-6 mt-1"
+            >
+              <input
+                type="checkbox"
+                checked={isSelected}
+                onChange={() => {}}
+                className="w-5 h-5 rounded border-gray-300 text-primary focus:ring-primary cursor-pointer"
+              />
+            </div>
+          )}
+
           {/* Task Type Icon */}
           <div className={`text-3xl p-2 rounded-lg ${typeInfo.bgColor}`}>
             {typeInfo.icon}
@@ -698,6 +773,14 @@ export default function OperationsPage() {
           </div>
         </div>
       )}
+
+      {/* Bulk Action Bar */}
+      <BulkActionBar
+        selectedTasks={selectedTasks}
+        onClearSelection={clearSelection}
+        onBulkComplete={handleBulkComplete}
+        isLoading={isBulkCompleting}
+      />
     </div>
   );
 }

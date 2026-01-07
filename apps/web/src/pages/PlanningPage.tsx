@@ -8,7 +8,6 @@ import {
   useCreateOrder,
   useDeleteOrder,
   useCloneOrder,
-  useUpdateTask,
   useRecurringSchedules,
   useCreateRecurringSchedule,
   useDeleteRecurringSchedule,
@@ -22,7 +21,7 @@ import { OrderViewModal } from '@/components/orders/OrderViewModal';
 import type { Product, CreateOrder, Order, OrderWithItems, CreateRecurringOrderSchedule } from '@farm/shared';
 import { calculateProductionSchedule, calculateBlendProductionSchedule, getShortDayName } from '@farm/shared';
 
-type ViewMode = 'orders' | 'tasks' | 'recurring';
+type ViewMode = 'orders' | 'recurring';
 
 interface OrderItemInput {
   productId: string;
@@ -64,7 +63,6 @@ export default function PlanningPage() {
   const createOrder = useCreateOrder(currentFarmId ?? '');
   const deleteOrder = useDeleteOrder(currentFarmId ?? '');
   const cloneOrder = useCloneOrder(currentFarmId ?? '');
-  const updateTask = useUpdateTask(currentFarmId ?? '');
   const createRecurringSchedule = useCreateRecurringSchedule(currentFarmId ?? '');
   const deleteRecurringSchedule = useDeleteRecurringSchedule(currentFarmId ?? '');
   const updateRecurringSchedule = useUpdateRecurringSchedule(currentFarmId ?? '');
@@ -114,19 +112,7 @@ export default function PlanningPage() {
   ) ?? [];
 
   const activeOrders = orders?.filter((o) => o.status === 'PENDING' || o.status === 'IN_PROGRESS') ?? [];
-  const todayStr = new Date().toDateString();
-  const todayTasks = tasks?.filter((t) => t.dueDate && new Date(t.dueDate).toDateString() === todayStr) ?? [];
-  const pendingTasks = tasks?.filter((t) => t.status === 'TODO') ?? [];
-
-  // Get tasks for this week
-  const now = new Date();
-  const weekEnd = new Date(now);
-  weekEnd.setDate(weekEnd.getDate() + 7);
-  const weekTasks = tasks?.filter((t) => {
-    if (!t.dueDate) return false;
-    const due = new Date(t.dueDate);
-    return due >= now && due <= weekEnd;
-  }) ?? [];
+  const activeSchedules = recurringSchedules?.filter((s) => s.isActive) ?? [];
 
   const handleAddItem = () => {
     setOrderItems([...orderItems, { ...emptyOrderItem }]);
@@ -401,26 +387,8 @@ export default function PlanningPage() {
     }
   };
 
-  const handleCompleteTask = async (taskId: string) => {
-    try {
-      await updateTask.mutateAsync({ taskId, data: { status: 'COMPLETED' } });
-    } catch (err) {
-      alert(err instanceof Error ? err.message : 'Failed to update task');
-    }
-  };
-
   const formatDate = (date: Date | string) => {
     return new Date(date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-  };
-
-  const getTaskTypeLabel = (type: string) => {
-    const labels: Record<string, string> = {
-      SOAK: 'Soak',
-      SEED: 'Seed',
-      MOVE_TO_LIGHT: 'Move to Light',
-      HARVESTING: 'Harvest',
-    };
-    return labels[type] || type;
   };
 
   // Growth stage calculation for an individual order item
@@ -492,7 +460,7 @@ export default function PlanningPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold">Production Planning</h1>
-          <p className="text-muted-foreground">Manage orders and production tasks</p>
+          <p className="text-muted-foreground">Add and manage orders</p>
         </div>
         <button
           onClick={handleOpenCreateOrder}
@@ -503,22 +471,14 @@ export default function PlanningPage() {
       </div>
 
       {/* Stats */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <div className="border rounded-lg p-4 bg-card">
           <p className="text-sm text-muted-foreground">Active Orders</p>
           <p className="text-2xl font-bold">{activeOrders.length}</p>
         </div>
         <div className="border rounded-lg p-4 bg-card">
-          <p className="text-sm text-muted-foreground">Today's Tasks</p>
-          <p className="text-2xl font-bold">{todayTasks.length}</p>
-        </div>
-        <div className="border rounded-lg p-4 bg-card">
-          <p className="text-sm text-muted-foreground">Pending Tasks</p>
-          <p className="text-2xl font-bold">{pendingTasks.length}</p>
-        </div>
-        <div className="border rounded-lg p-4 bg-card">
-          <p className="text-sm text-muted-foreground">This Week</p>
-          <p className="text-2xl font-bold">{weekTasks.length}</p>
+          <p className="text-sm text-muted-foreground">Active Schedules</p>
+          <p className="text-2xl font-bold">{activeSchedules.length}</p>
         </div>
       </div>
 
@@ -529,12 +489,6 @@ export default function PlanningPage() {
           className={`px-4 py-2 -mb-px ${viewMode === 'orders' ? 'border-b-2 border-primary font-medium' : 'text-muted-foreground'}`}
         >
           Orders
-        </button>
-        <button
-          onClick={() => setViewMode('tasks')}
-          className={`px-4 py-2 -mb-px ${viewMode === 'tasks' ? 'border-b-2 border-primary font-medium' : 'text-muted-foreground'}`}
-        >
-          Tasks
         </button>
         <button
           onClick={() => setViewMode('recurring')}
@@ -618,57 +572,6 @@ export default function PlanningPage() {
                   </div>
                 </div>
               ))}
-            </div>
-          )}
-        </div>
-      )}
-
-      {viewMode === 'tasks' && (
-        <div>
-          {tasks?.length === 0 ? (
-            <div className="border rounded-lg p-12 text-center">
-              <h3 className="text-lg font-semibold">No tasks yet</h3>
-              <p className="text-muted-foreground">Tasks will appear here when you create orders.</p>
-            </div>
-          ) : (
-            <div className="space-y-2">
-              {tasks
-                ?.filter((t) => t.status !== 'COMPLETED')
-                .sort((a, b) => {
-                  if (!a.dueDate) return 1;
-                  if (!b.dueDate) return -1;
-                  return new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime();
-                })
-                .map((task) => (
-                  <div
-                    key={task.id}
-                    className="flex items-center justify-between border rounded-lg px-4 py-3 bg-card hover:bg-muted/30"
-                  >
-                    <div className="flex items-center gap-4">
-                      <button
-                        onClick={() => handleCompleteTask(task.id)}
-                        className="w-5 h-5 rounded border-2 border-muted-foreground hover:border-primary flex items-center justify-center"
-                        title="Mark complete"
-                      >
-                        {task.status === 'COMPLETED' && (
-                          <svg className="w-3 h-3 text-primary" fill="currentColor" viewBox="0 0 20 20">
-                            <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
-                          </svg>
-                        )}
-                      </button>
-                      <div>
-                        <div className="font-medium">{task.title}</div>
-                        <div className="text-sm text-muted-foreground">{task.description}</div>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-4">
-                      <span className="text-sm px-2 py-0.5 rounded bg-muted">{getTaskTypeLabel(task.type)}</span>
-                      <span className="text-sm text-muted-foreground">
-                        {task.dueDate ? formatDate(task.dueDate) : 'No date'}
-                      </span>
-                    </div>
-                  </div>
-                ))}
             </div>
           )}
         </div>

@@ -261,14 +261,16 @@ export function CanvasToolbar({
         {isEditMode ? (
           <>
             {isDirty && (
-              <span className="text-sm text-muted-foreground">Unsaved changes</span>
+              <>
+                <span className="text-sm text-muted-foreground">Unsaved changes</span>
+                <button
+                  onClick={onCancel}
+                  className="px-4 py-1.5 border border-border rounded-md text-sm hover:bg-muted"
+                >
+                  Cancel
+                </button>
+              </>
             )}
-            <button
-              onClick={onCancel}
-              className="px-4 py-1.5 border border-border rounded-md text-sm hover:bg-muted"
-            >
-              Cancel
-            </button>
             <button
               onClick={onSave}
               disabled={!isDirty || isSaving}

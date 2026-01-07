@@ -12,6 +12,7 @@ import { DEFAULT_ELEMENT_COLORS, DEFAULT_ELEMENT_DIMENSIONS } from '@farm/shared
 import type { UnitSystem, ElementPreset } from '@farm/shared';
 import { getGridSizeForUnit, getUnitLabel } from '@/lib/units';
 import type { RackAssignment } from '@/lib/api-client';
+import { CanvasContextMenu } from './CanvasContextMenu';
 
 // Calculate font size that fits text within a given width
 function calculateFitFontSize(text: string, maxWidth: number, maxFontSize: number = 14, minFontSize: number = 8): number {
@@ -141,6 +142,9 @@ export function FarmCanvas({
 
   // Notification state for user feedback
   const [notification, setNotification] = useState<{ message: string; type: 'error' | 'info' } | null>(null);
+
+  // Context menu state for right-click
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; elementId: string } | null>(null);
 
   // Distance indicator state for showing distances while dragging
   const [distanceGuides, setDistanceGuides] = useState<Array<{
@@ -490,6 +494,14 @@ export function FarmCanvas({
         return;
       }
 
+      // Pan tool - left click to pan
+      if (activeTool === 'pan') {
+        e.evt.preventDefault();
+        setIsMiddleMousePanning(true); // Reuse the same panning state
+        lastPanPos.current = { x: e.evt.clientX, y: e.evt.clientY };
+        return;
+      }
+
       const scaledPos = getScaledPos();
       const snappedPos = snapPosition(scaledPos);
 
@@ -526,7 +538,8 @@ export function FarmCanvas({
         const defaultWidth = activePreset?.defaultWidth ?? ('width' in defaults ? defaults.width : 100);
         const defaultHeight = activePreset?.defaultHeight ?? ('height' in defaults ? defaults.height : 60);
         const defaultColor = activePreset?.defaultColor ?? DEFAULT_ELEMENT_COLORS[activeElementType as keyof typeof DEFAULT_ELEMENT_COLORS] ?? '#666666';
-        const elementName = activePreset?.name ?? `${activeElementType.replace('_', ' ')} ${elements.length + 1}`;
+        const typeCount = elements.filter((el) => el.type === activeElementType).length;
+        const elementName = activePreset?.name ?? `${activeElementType.replace('_', ' ')} ${typeCount + 1}`;
 
         // Special handling for DOOR - must click directly on a wall
         if (activeElementType === 'DOOR') {
@@ -891,6 +904,30 @@ export function FarmCanvas({
     [activeTool, setSelectedId, toggleSelection, selectedIds, elements, onElementSelect, onMultiSelect, addMeasurePoint, getScaledPos]
   );
 
+  // Handle right-click on element for context menu
+  const handleElementContextMenu = useCallback(
+    (element: CanvasElement, e: KonvaEventObject<PointerEvent>) => {
+      e.evt.preventDefault();
+      e.cancelBubble = true;
+
+      // Only show context menu in edit mode
+      if (!isEditMode) return;
+
+      // Use the pointer event's client coordinates for screen position
+      const x = e.evt.clientX;
+      const y = e.evt.clientY;
+
+      // Select the element if not already selected
+      if (!selectedIds.includes(element.id)) {
+        setSelectedId(element.id, 'element');
+        onElementSelect?.(element);
+      }
+
+      setContextMenu({ x, y, elementId: element.id });
+    },
+    [isEditMode, selectedIds, setSelectedId, onElementSelect]
+  );
+
   // Handle drag start - capture initial positions for multi-drag (history pushed on drag END)
   const handleDragStart = useCallback((draggedElementId: string) => {
     // Store initial positions of all selected elements for multi-drag
@@ -1018,14 +1055,32 @@ export function FarmCanvas({
       node.scaleX(1);
       node.scaleY(1);
 
-      let newWidth = Math.max(20, node.width() * scaleX);
-      let newHeight = Math.max(20, node.height() * scaleY);
+      // Detect if this is a pure rotation (scale values very close to 1.0)
+      // Konva's Transformer can apply tiny scale changes during rotation
+      const isOnlyRotating = Math.abs(scaleX - 1) < 0.01 && Math.abs(scaleY - 1) < 0.01;
+
+      let newWidth: number;
+      let newHeight: number;
+
+      if (isOnlyRotating) {
+        // Preserve original dimensions during rotation
+        newWidth = element.width ?? node.width();
+        newHeight = element.height ?? node.height();
+      } else {
+        // Apply scale for actual resize operations
+        newWidth = Math.max(20, node.width() * scaleX);
+        newHeight = Math.max(20, node.height() * scaleY);
+      }
+
       let newX = node.x();
       let newY = node.y();
 
       if (snapToGrid) {
-        newWidth = snapToGridValue(newWidth, unitGridSize);
-        newHeight = snapToGridValue(newHeight, unitGridSize);
+        // Only snap dimensions if resizing, not rotating
+        if (!isOnlyRotating) {
+          newWidth = snapToGridValue(newWidth, unitGridSize);
+          newHeight = snapToGridValue(newHeight, unitGridSize);
+        }
         newX = snapToGridValue(newX, unitGridSize);
         newY = snapToGridValue(newY, unitGridSize);
       }
@@ -1268,15 +1323,24 @@ export function FarmCanvas({
         y={startY}
         draggable={false}
         onMouseDown={(e) => {
+          // Allow pan tool to work over elements
+          if (activeTool === 'pan') return;
           // When placing doors, let click pass through to Stage
           if (isPlacingDoor) return;
           // Otherwise stop propagation to prevent Stage from handling this click
           e.cancelBubble = true;
         }}
         onClick={(e) => {
+          // Allow pan tool clicks to pass through
+          if (activeTool === 'pan') return;
           // When placing doors, don't handle wall click
           if (isPlacingDoor) return;
           handleElementClick(element, e);
+        }}
+        onContextMenu={(e) => {
+          if (activeTool === 'pan') return;
+          if (isPlacingDoor) return;
+          handleElementContextMenu(element, e);
         }}
       >
         {/* Render wall segments */}
@@ -1518,9 +1582,18 @@ export function FarmCanvas({
         rotation={element.rotation ?? 0}
         draggable={isEditMode && activeTool === 'select'}
         onMouseDown={(e) => {
+          // Allow pan tool to work over elements
+          if (activeTool === 'pan') return;
           e.cancelBubble = true;
         }}
-        onClick={(e) => handleElementClick(element, e)}
+        onClick={(e) => {
+          if (activeTool === 'pan') return;
+          handleElementClick(element, e);
+        }}
+        onContextMenu={(e) => {
+          if (activeTool === 'pan') return;
+          handleElementContextMenu(element, e);
+        }}
         onDragStart={() => handleDragStart(element.id)}
         onDragMove={(e) => {
           const node = e.target;
@@ -1633,9 +1706,18 @@ export function FarmCanvas({
         rotation={angle}
         draggable={false}
         onMouseDown={(e) => {
+          // Allow pan tool to work over elements
+          if (activeTool === 'pan') return;
           e.cancelBubble = true;
         }}
-        onClick={(e) => handleElementClick(element, e)}
+        onClick={(e) => {
+          if (activeTool === 'pan') return;
+          handleElementClick(element, e);
+        }}
+        onContextMenu={(e) => {
+          if (activeTool === 'pan') return;
+          handleElementContextMenu(element, e);
+        }}
       >
         {/* Base walkway fill */}
         <Rect
@@ -1860,8 +1942,6 @@ export function FarmCanvas({
         key={element.id}
         x={element.x ?? 0}
         y={element.y ?? 0}
-        width={elementWidth}
-        height={elementHeight}
         rotation={element.rotation ?? 0}
         draggable={isEditMode && activeTool === 'select'}
         ref={(node) => {
@@ -1873,10 +1953,19 @@ export function FarmCanvas({
           }
         }}
         onMouseDown={(e) => {
+          // Allow pan tool to work over elements
+          if (activeTool === 'pan') return;
           // Stop propagation to prevent Stage from handling this click
           e.cancelBubble = true;
         }}
-        onClick={(e) => handleElementClick(element, e)}
+        onClick={(e) => {
+          if (activeTool === 'pan') return;
+          handleElementClick(element, e);
+        }}
+        onContextMenu={(e) => {
+          if (activeTool === 'pan') return;
+          handleElementContextMenu(element, e);
+        }}
         onDragStart={() => handleDragStart(element.id)}
         onDragMove={(e) => {
           const node = e.target;
@@ -1920,6 +2009,7 @@ export function FarmCanvas({
           />
         )}
         {/* Element name - for GROW_RACK in view mode, center and auto-scale; otherwise top-left */}
+        {/* Text is non-listening so it doesn't extend the clickable area */}
         {isGrowRack && !isEditMode ? (
           <Text
             text={element.name}
@@ -1937,6 +2027,7 @@ export function FarmCanvas({
             verticalAlign="middle"
             wrap="none"
             ellipsis={true}
+            listening={false}
           />
         ) : (
           <Text
@@ -1951,6 +2042,7 @@ export function FarmCanvas({
             shadowBlur={2}
             shadowOpacity={0.5}
             ellipsis={true}
+            listening={false}
           />
         )}
         {/* Grow rack specific: show levels and capacity in edit mode, RackOverlay in view mode */}
@@ -1959,7 +2051,7 @@ export function FarmCanvas({
             {/* Edit mode: show capacity/level badges */}
             {isEditMode && (
               <>
-                {/* Level indicator lines */}
+                {/* Level indicator lines - non-listening */}
                 {levels > 1 && Array.from({ length: levels - 1 }).map((_, i) => (
                   <Line
                     key={`level-${i}`}
@@ -1972,10 +2064,11 @@ export function FarmCanvas({
                     stroke="rgba(255,255,255,0.4)"
                     strokeWidth={1}
                     dash={[4, 2]}
+                    listening={false}
                   />
                 ))}
-                {/* Capacity badge */}
-                <Group x={elementWidth - 4} y={elementHeight - 4}>
+                {/* Capacity badge - non-listening */}
+                <Group x={elementWidth - 4} y={elementHeight - 4} listening={false}>
                   <Rect
                     x={-40}
                     y={-18}
@@ -1992,9 +2085,9 @@ export function FarmCanvas({
                     fill="#fff"
                   />
                 </Group>
-                {/* Levels badge (top right) */}
+                {/* Levels badge (top right) - non-listening */}
                 {levels > 1 && (
-                  <Group x={elementWidth - 4} y={4}>
+                  <Group x={elementWidth - 4} y={4} listening={false}>
                     <Rect
                       x={-28}
                       y={0}
@@ -2042,8 +2135,8 @@ export function FarmCanvas({
                     cornerRadius={4}
                     listening={false}
                   />
-                  {/* Tray count badge at bottom center */}
-                  <Group x={elementWidth / 2} y={elementHeight - 6}>
+                  {/* Tray count badge at bottom center - non-listening */}
+                  <Group x={elementWidth / 2} y={elementHeight - 6} listening={false}>
                     <Rect
                       x={-30}
                       y={-16}
@@ -2146,7 +2239,11 @@ export function FarmCanvas({
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
         onDblClick={handleDoubleClick}
-        onContextMenu={(e) => e.evt.preventDefault()}
+        onContextMenu={(e) => {
+          e.evt.preventDefault();
+          // Close context menu when clicking on empty stage area
+          setContextMenu(null);
+        }}
         style={{ backgroundColor: '#f5f5f5', cursor: getCursor() }}
       >
       {/* Grid layer - non-listening so clicks pass through to stage */}
@@ -2402,6 +2499,12 @@ export function FarmCanvas({
         )}
       </Layer>
     </Stage>
+
+      {/* Context menu for right-click actions */}
+      <CanvasContextMenu
+        position={contextMenu}
+        onClose={() => setContextMenu(null)}
+      />
     </div>
   );
 }

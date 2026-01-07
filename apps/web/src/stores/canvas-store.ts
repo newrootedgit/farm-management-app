@@ -138,6 +138,12 @@ interface CanvasState {
   updateElement: (id: string, updates: Partial<CanvasElement>) => void;
   deleteElement: (id: string) => void;
 
+  // Layer ordering
+  bringToFront: (id: string) => void;
+  sendToBack: (id: string) => void;
+  bringForward: (id: string) => void;
+  sendBackward: (id: string) => void;
+
   // Wall drawing state
   wallDrawing: WallDrawingState;
   setWallDrawMode: (mode: WallDrawMode) => void;
@@ -390,6 +396,54 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       };
     });
     get().pushHistory();
+  },
+
+  // Layer ordering - elements later in array render on top
+  bringToFront: (id) => {
+    get().pushHistory();
+    set((state) => {
+      const index = state.elements.findIndex((e) => e.id === id);
+      if (index === -1 || index === state.elements.length - 1) return state;
+      const element = state.elements[index];
+      const newElements = [...state.elements];
+      newElements.splice(index, 1);
+      newElements.push(element);
+      return { elements: newElements, isDirty: true };
+    });
+  },
+  sendToBack: (id) => {
+    get().pushHistory();
+    set((state) => {
+      const index = state.elements.findIndex((e) => e.id === id);
+      if (index === -1 || index === 0) return state;
+      const element = state.elements[index];
+      const newElements = [...state.elements];
+      newElements.splice(index, 1);
+      newElements.unshift(element);
+      return { elements: newElements, isDirty: true };
+    });
+  },
+  bringForward: (id) => {
+    get().pushHistory();
+    set((state) => {
+      const index = state.elements.findIndex((e) => e.id === id);
+      if (index === -1 || index === state.elements.length - 1) return state;
+      const newElements = [...state.elements];
+      // Swap with the element above
+      [newElements[index], newElements[index + 1]] = [newElements[index + 1], newElements[index]];
+      return { elements: newElements, isDirty: true };
+    });
+  },
+  sendBackward: (id) => {
+    get().pushHistory();
+    set((state) => {
+      const index = state.elements.findIndex((e) => e.id === id);
+      if (index === -1 || index === 0) return state;
+      const newElements = [...state.elements];
+      // Swap with the element below
+      [newElements[index], newElements[index - 1]] = [newElements[index - 1], newElements[index]];
+      return { elements: newElements, isDirty: true };
+    });
   },
 
   // Wall drawing

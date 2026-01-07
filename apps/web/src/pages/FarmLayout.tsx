@@ -88,27 +88,27 @@ export default function FarmLayout() {
 
   // Sync API elements to canvas store on load
   useEffect(() => {
-    // Skip sync while saving to prevent duplicates from React Query refetches
+    // Skip sync while saving to prevent overwriting local state with stale API data
     if (isSavingRef.current) {
       return;
     }
     if (apiElements) {
       const canvasElements: CanvasElement[] = apiElements.map((el) => {
-        // For walls, ensure coordinates are numbers (API might return null/string)
-        const isWall = el.type === 'WALL';
+        // Walls and walkways use line coordinates (startX, startY, endX, endY)
+        const isLineElement = el.type === 'WALL' || el.type === 'WALKWAY';
         return {
           id: el.id,
           name: el.name,
           type: el.type,
-          // Wall coordinates - convert to number, default to 0 for walls
-          startX: isWall ? (Number(el.startX) || 0) : undefined,
-          startY: isWall ? (Number(el.startY) || 0) : undefined,
-          endX: isWall ? (Number(el.endX) || 0) : undefined,
-          endY: isWall ? (Number(el.endY) || 0) : undefined,
+          // Line element coordinates - convert to number
+          startX: isLineElement ? (Number(el.startX) || 0) : undefined,
+          startY: isLineElement ? (Number(el.startY) || 0) : undefined,
+          endX: isLineElement ? (Number(el.endX) || 0) : undefined,
+          endY: isLineElement ? (Number(el.endY) || 0) : undefined,
           thickness: el.thickness != null ? Number(el.thickness) : undefined,
-          // Non-wall element position
-          x: el.positionX != null ? Number(el.positionX) : undefined,
-          y: el.positionY != null ? Number(el.positionY) : undefined,
+          // Non-line element position (rectangles)
+          x: !isLineElement && el.positionX != null ? Number(el.positionX) : undefined,
+          y: !isLineElement && el.positionY != null ? Number(el.positionY) : undefined,
           width: el.width != null ? Number(el.width) : undefined,
           height: el.height != null ? Number(el.height) : undefined,
           rotation: Number(el.rotation) || 0,
@@ -123,14 +123,16 @@ export default function FarmLayout() {
       setSavedState(canvasElements, []);
       // Initialize history only once on first load
       if (!historyInitializedRef.current) {
-        console.log('[FarmLayout] Initializing history on first load');
         pushHistory();
         historyInitializedRef.current = true;
-      } else {
-        console.log('[FarmLayout] Skipping history init - already initialized');
       }
     }
   }, [apiElements, setElements, pushHistory, setSavedState]);
+
+  // Reset history flag when farm changes so new farm gets fresh history
+  useEffect(() => {
+    historyInitializedRef.current = false;
+  }, [currentFarmId]);
 
   // Sync user preferences
   useEffect(() => {
@@ -257,15 +259,16 @@ export default function FarmLayout() {
           const newElements: CanvasElement[] = [];
 
           for (const el of clipboard) {
+            const isLineElement = el.type === 'WALL' || el.type === 'WALKWAY';
             const newElement: CanvasElement = {
               ...el,
-              id: generateId(el.type === 'WALL' ? 'wall' : 'el'),
+              id: generateId(isLineElement ? el.type.toLowerCase() : 'el'),
               name: `${el.name} (copy)`,
               metadata: el.metadata ? { ...el.metadata } : undefined,
             };
 
             // Offset position based on element type
-            if (el.type === 'WALL') {
+            if (isLineElement) {
               newElement.startX = (el.startX ?? 0) + offset;
               newElement.startY = (el.startY ?? 0) + offset;
               newElement.endX = (el.endX ?? 0) + offset;
@@ -281,6 +284,12 @@ export default function FarmLayout() {
           // Add all elements at once (single undo operation)
           addElementsToStore(newElements);
           const newIds = newElements.map(el => el.id);
+
+          // Update clipboard with new positions so next paste stacks progressively
+          setClipboard(newElements.map(el => ({
+            ...el,
+            metadata: el.metadata ? { ...el.metadata } : undefined,
+          })));
 
           // Select all newly pasted elements
           if (newIds.length === 1) {
@@ -302,14 +311,15 @@ export default function FarmLayout() {
           const newElements: CanvasElement[] = [];
 
           for (const el of selectedElements) {
+            const isLineElement = el.type === 'WALL' || el.type === 'WALKWAY';
             const newElement: CanvasElement = {
               ...el,
-              id: generateId(el.type === 'WALL' ? 'wall' : 'el'),
+              id: generateId(isLineElement ? el.type.toLowerCase() : 'el'),
               name: `${el.name} (copy)`,
               metadata: el.metadata ? { ...el.metadata } : undefined,
             };
 
-            if (el.type === 'WALL') {
+            if (isLineElement) {
               newElement.startX = (el.startX ?? 0) + offset;
               newElement.startY = (el.startY ?? 0) + offset;
               newElement.endX = (el.endX ?? 0) + offset;
@@ -492,10 +502,11 @@ export default function FarmLayout() {
       setSaveNotification('Failed to save layout');
       setTimeout(() => setSaveNotification(null), 3000);
     } finally {
-      // Clear saving flag after a short delay to allow React Query to settle
+      // Clear saving flag after a longer delay to allow React Query refetch to complete
+      // This prevents the sync effect from overwriting local state with API data
       setTimeout(() => {
         isSavingRef.current = false;
-      }, 500);
+      }, 3000);
     }
   }, [currentFarmId, layout, elements, zones, apiElements, updateLayout, createElement, deleteElement, bulkUpdateElements, setDirty, resetHistory, setSavedState]);
 

@@ -1,12 +1,17 @@
-import { XMarkIcon, PrinterIcon, ClipboardDocumentListIcon } from '@heroicons/react/24/outline';
+import { useState } from 'react';
+import { XMarkIcon, PrinterIcon, ClipboardDocumentListIcon, ChevronDownIcon } from '@heroicons/react/24/outline';
 import type { OrderWithItems } from '@farm/shared';
+import { InvoiceDocument, PackListDocument } from '@/components/print';
 
 interface OrderViewModalProps {
   order: OrderWithItems;
   onClose: () => void;
+  farmName?: string;
 }
 
-export function OrderViewModal({ order, onClose }: OrderViewModalProps) {
+export function OrderViewModal({ order, onClose, farmName }: OrderViewModalProps) {
+  const [showPrintMenu, setShowPrintMenu] = useState(false);
+  const [printType, setPrintType] = useState<'invoice' | 'packlist' | null>(null);
   const formatDate = (date: Date | string) => {
     return new Date(date).toLocaleDateString('en-US', {
       weekday: 'short',
@@ -32,10 +37,6 @@ export function OrderViewModal({ order, onClose }: OrderViewModalProps) {
     READY: 'bg-green-100 text-green-800',
     DELIVERED: 'bg-purple-100 text-purple-800',
     CANCELLED: 'bg-red-100 text-red-800',
-  };
-
-  const handlePrint = () => {
-    window.print();
   };
 
   const handleCopyToClipboard = () => {
@@ -78,13 +79,44 @@ ${order.notes ? `\nNotes: ${order.notes}` : ''}`;
               >
                 <ClipboardDocumentListIcon className="h-5 w-5" />
               </button>
-              <button
-                onClick={handlePrint}
-                className="p-2 text-gray-400 hover:text-gray-600 rounded-lg hover:bg-gray-100"
-                title="Print"
-              >
-                <PrinterIcon className="h-5 w-5" />
-              </button>
+
+              {/* Print Dropdown */}
+              <div className="relative">
+                <button
+                  onClick={() => setShowPrintMenu(!showPrintMenu)}
+                  className="flex items-center gap-1 p-2 text-gray-400 hover:text-gray-600 rounded-lg hover:bg-gray-100"
+                  title="Print options"
+                >
+                  <PrinterIcon className="h-5 w-5" />
+                  <ChevronDownIcon className="h-3 w-3" />
+                </button>
+                {showPrintMenu && (
+                  <>
+                    <div className="fixed inset-0 z-10" onClick={() => setShowPrintMenu(false)} />
+                    <div className="absolute right-0 mt-1 w-40 bg-white border rounded-lg shadow-lg py-1 z-20">
+                      <button
+                        onClick={() => {
+                          setPrintType('invoice');
+                          setShowPrintMenu(false);
+                        }}
+                        className="w-full px-3 py-2 text-sm text-left hover:bg-gray-100"
+                      >
+                        Print Invoice
+                      </button>
+                      <button
+                        onClick={() => {
+                          setPrintType('packlist');
+                          setShowPrintMenu(false);
+                        }}
+                        className="w-full px-3 py-2 text-sm text-left hover:bg-gray-100"
+                      >
+                        Print Pack List
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
+
               <button
                 onClick={onClose}
                 className="p-2 text-gray-400 hover:text-gray-600 rounded-lg hover:bg-gray-100"
@@ -160,6 +192,69 @@ ${order.notes ? `\nNotes: ${order.notes}` : ''}`;
           </div>
         </div>
       </div>
+
+      {/* Print Preview Modal */}
+      {printType && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center">
+          <div className="absolute inset-0 bg-black/50" onClick={() => setPrintType(null)} />
+          <div className="relative bg-white rounded-lg shadow-xl max-w-4xl max-h-[90vh] w-full mx-4 flex flex-col">
+            <div className="flex items-center justify-between px-4 py-3 border-b">
+              <h2 className="font-semibold">
+                {printType === 'invoice' ? 'Invoice Preview' : 'Pack List Preview'}
+              </h2>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => {
+                    const printWindow = window.open('', '_blank');
+                    if (printWindow) {
+                      const content = document.getElementById('print-preview-content');
+                      printWindow.document.write(`
+                        <!DOCTYPE html>
+                        <html>
+                        <head>
+                          <title>${printType === 'invoice' ? 'Invoice' : 'Pack List'} - Order ${order.orderNumber}</title>
+                          <style>
+                            body { margin: 0; padding: 20px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+                          </style>
+                        </head>
+                        <body>
+                          ${content?.innerHTML || ''}
+                        </body>
+                        </html>
+                      `);
+                      printWindow.document.close();
+                      printWindow.focus();
+                      setTimeout(() => {
+                        printWindow.print();
+                        printWindow.close();
+                      }, 250);
+                    }
+                    setPrintType(null);
+                  }}
+                  className="px-3 py-1.5 bg-primary text-white rounded-md text-sm font-medium hover:bg-primary/90"
+                >
+                  Print
+                </button>
+                <button
+                  onClick={() => setPrintType(null)}
+                  className="p-1.5 hover:bg-gray-100 rounded-md"
+                >
+                  <XMarkIcon className="h-4 w-4" />
+                </button>
+              </div>
+            </div>
+            <div className="flex-1 overflow-auto p-4 bg-gray-100">
+              <div id="print-preview-content" className="bg-white mx-auto" style={{ maxWidth: '800px' }}>
+                {printType === 'invoice' ? (
+                  <InvoiceDocument order={order} farmName={farmName} />
+                ) : (
+                  <PackListDocument order={order} farmName={farmName} />
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

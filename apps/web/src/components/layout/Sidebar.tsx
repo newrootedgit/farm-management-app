@@ -29,7 +29,7 @@ interface NavItem {
 const navigation: NavItem[] = [
   { name: 'Dashboard', href: '/', icon: HomeIcon },
   { name: 'Operations', href: '/operations', icon: ClipboardIcon },
-  { name: 'Planning', href: '/planning', icon: CalendarIcon, minRole: 'FARM_MANAGER' },
+  { name: 'Orders', href: '/orders', icon: CalendarIcon, minRole: 'FARM_MANAGER' },
   { name: 'Varieties & Mixes', href: '/inventory', icon: PackageIcon, minRole: 'FARM_MANAGER' },
   { name: 'Supplies & Inventory', href: '/supplies', icon: BoxIcon, minRole: 'FARM_MANAGER' },
   { name: 'Customers', href: '/customers', icon: CustomerIcon, minRole: 'SALESPERSON' },
