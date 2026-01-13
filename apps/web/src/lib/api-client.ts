@@ -20,7 +20,6 @@ import type {
   DeliverySignature, CaptureSignature,
   FulfillmentStatus, FulfillmentMethod, PaymentType, RouteStatus,
   DocumentType, GeneratedDocument, GenerateDocument, SendDocumentEmail,
-  ApiResponse, PaginatedResponse,
   CsaProgram, CreateCsaProgram, UpdateCsaProgram, CsaProgramWithRelations,
   CsaShareType, CreateCsaShareType, UpdateCsaShareType,
   CsaMember, EnrollCsaMember, UpdateCsaMember, RecordCsaPayment, CsaMemberWithRelations,
@@ -43,8 +42,8 @@ async function fetchApi<T>(
   options?: RequestInit
 ): Promise<T> {
   // Only set Content-Type for requests with a body
-  const headers: HeadersInit = {
-    ...options?.headers,
+  const headers: Record<string, string> = {
+    ...(options?.headers as Record<string, string>),
   };
   if (options?.body) {
     headers['Content-Type'] = 'application/json';
@@ -895,6 +894,7 @@ interface PaymentSettings {
   preferredProcessor: string;
   paymentTiming: string;
   platformFeePercent: number;
+  applicationFeePercent?: number;
   isConnected: boolean;
   canAcceptPayments: boolean;
 }
@@ -938,6 +938,7 @@ interface PaymentLinkDetails {
 
 interface StripeStatus {
   status: string;
+  accountId?: string;
   onboardingComplete: boolean;
   chargesEnabled: boolean;
   payoutsEnabled: boolean;

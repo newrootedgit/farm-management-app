@@ -61,7 +61,7 @@ export const useUserStore = create<UserState>()(
     }),
     {
       name: 'user-storage',
-      onRehydrate: () => (state) => {
+      onRehydrateStorage: () => (state) => {
         // Apply dark mode on app load
         if (state?.darkMode) {
           document.documentElement.classList.add('dark');
