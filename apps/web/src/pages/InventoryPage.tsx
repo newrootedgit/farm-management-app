@@ -103,6 +103,15 @@ export default function InventoryPage() {
     tabParam === 'mixes' ? 'mixes' : 'varieties'
   );
 
+  // Sync tab state when URL param changes (for same-page navigation)
+  useEffect(() => {
+    if (tabParam === 'mixes') {
+      setActiveTab('mixes');
+    } else if (tabParam === 'varieties') {
+      setActiveTab('varieties');
+    }
+  }, [tabParam]);
+
   const [showProductForm, setShowProductForm] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [productFormData, setProductFormData] = useState<ProductFormData>(emptyProductForm);
