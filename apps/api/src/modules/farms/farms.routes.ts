@@ -747,36 +747,112 @@ const farmsRoutes: FastifyPluginAsync = async (fastify) => {
         throw new BadRequestError(`Level must be between 1 and ${maxLevels}`);
       }
 
-      const assignment = await fastify.prisma.rackAssignment.create({
-        data: {
-          farmId,
-          rackElementId: body.rackElementId,
-          level: body.level,
-          orderItemId: body.orderItemId,
-          trayCount: body.trayCount,
-          taskId: body.taskId,
-          assignedBy: body.assignedBy,
-        },
-        include: {
-          rackElement: {
-            select: {
-              id: true,
-              name: true,
-              metadata: true,
+      // Use upsert to handle cases where a rack assignment already exists for this task
+      // (e.g., from a previous completion attempt)
+      let assignment;
+      if (body.taskId) {
+        // Check if assignment already exists for this task
+        const existingAssignment = await fastify.prisma.rackAssignment.findUnique({
+          where: { taskId: body.taskId },
+        });
+
+        if (existingAssignment) {
+          // Update existing assignment
+          assignment = await fastify.prisma.rackAssignment.update({
+            where: { taskId: body.taskId },
+            data: {
+              rackElementId: body.rackElementId,
+              level: body.level,
+              trayCount: body.trayCount,
+              assignedBy: body.assignedBy,
+              isActive: true,
+              removedAt: null,
             },
-          },
-          orderItem: {
             include: {
-              product: {
+              rackElement: {
                 select: {
                   id: true,
                   name: true,
+                  metadata: true,
+                },
+              },
+              orderItem: {
+                include: {
+                  product: {
+                    select: {
+                      id: true,
+                      name: true,
+                    },
+                  },
+                },
+              },
+            },
+          });
+        } else {
+          // Create new assignment
+          assignment = await fastify.prisma.rackAssignment.create({
+            data: {
+              farmId,
+              rackElementId: body.rackElementId,
+              level: body.level,
+              orderItemId: body.orderItemId,
+              trayCount: body.trayCount,
+              taskId: body.taskId,
+              assignedBy: body.assignedBy,
+            },
+            include: {
+              rackElement: {
+                select: {
+                  id: true,
+                  name: true,
+                  metadata: true,
+                },
+              },
+              orderItem: {
+                include: {
+                  product: {
+                    select: {
+                      id: true,
+                      name: true,
+                    },
+                  },
+                },
+              },
+            },
+          });
+        }
+      } else {
+        // No taskId, just create new assignment
+        assignment = await fastify.prisma.rackAssignment.create({
+          data: {
+            farmId,
+            rackElementId: body.rackElementId,
+            level: body.level,
+            orderItemId: body.orderItemId,
+            trayCount: body.trayCount,
+            assignedBy: body.assignedBy,
+          },
+          include: {
+            rackElement: {
+              select: {
+                id: true,
+                name: true,
+                metadata: true,
+              },
+            },
+            orderItem: {
+              include: {
+                product: {
+                  select: {
+                    id: true,
+                    name: true,
+                  },
                 },
               },
             },
           },
-        },
-      });
+        });
+      }
 
       return reply.status(201).send({
         success: true,
@@ -1797,12 +1873,15 @@ const farmsRoutes: FastifyPluginAsync = async (fastify) => {
       const { farmId, taskId } = request.params as { farmId: string; taskId: string };
       const data = UpdateTaskSchema.parse(request.body);
 
-      const updateData: any = { ...data };
-
-      // Set completedAt when status changes to COMPLETED
+      // Prevent marking as COMPLETED via PATCH - must use /complete endpoint with log data
       if (data.status === 'COMPLETED') {
-        updateData.completedAt = new Date();
+        return reply.status(400).send({
+          success: false,
+          error: 'Use POST /tasks/:taskId/complete to mark tasks as completed with log data',
+        });
       }
+
+      const updateData: any = { ...data };
 
       const task = await fastify.prisma.task.update({
         where: { id: taskId, farmId },
@@ -1811,44 +1890,6 @@ const farmsRoutes: FastifyPluginAsync = async (fastify) => {
           orderItem: { include: { product: true } },
         },
       });
-
-      // Update order item status based on task completion
-      if (task.orderItemId && data.status === 'COMPLETED') {
-        const statusMap: Record<string, string> = {
-          SOAK: 'SOAKING',
-          SEED: 'GERMINATING',
-          MOVE_TO_LIGHT: 'GROWING',
-          HARVESTING: 'HARVESTED',
-        };
-
-        const newStatus = statusMap[task.type];
-        if (newStatus) {
-          await fastify.prisma.orderItem.update({
-            where: { id: task.orderItemId },
-            data: { status: newStatus as any },
-          });
-
-          // If harvested, check if all items in order are harvested
-          if (newStatus === 'HARVESTED') {
-            const order = await fastify.prisma.order.findFirst({
-              where: { items: { some: { id: task.orderItemId } } },
-              include: { items: true },
-            });
-
-            if (order) {
-              const allHarvested = order.items.every(
-                (item) => item.id === task.orderItemId || item.status === 'HARVESTED'
-              );
-              if (allHarvested) {
-                await fastify.prisma.order.update({
-                  where: { id: order.id },
-                  data: { status: 'READY' },
-                });
-              }
-            }
-          }
-        }
-      }
 
       return {
         success: true,
@@ -1931,8 +1972,8 @@ const farmsRoutes: FastifyPluginAsync = async (fastify) => {
           updateData.actualTrays = actualTrays;
         }
 
-        // For SEED tasks, store the seedLot on the OrderItem for traceability
-        if (task.type === 'SEED' && seedLot) {
+        // Store seedLot on OrderItem for SOAK or SEED tasks (whichever is first)
+        if ((task.type === 'SOAK' || task.type === 'SEED') && seedLot) {
           updateData.seedLot = seedLot;
         }
 

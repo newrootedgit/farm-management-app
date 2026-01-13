@@ -9,12 +9,14 @@ import {
   useStripeConnect,
   useStripeStatus,
   useStripeDisconnect,
-  useUpdatePaymentSettings,
 } from '@/lib/api-client';
+import { AddressAutocomplete } from '@/components/AddressAutocomplete';
+import { useToast } from '@/components/ui/Toast';
 
 export default function SettingsPage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
+  const { showToast } = useToast();
   const { currentFarmId, setCurrentFarm } = useFarmStore();
   const { data: farm } = useFarm(currentFarmId ?? undefined);
   const updateFarm = useUpdateFarm(currentFarmId ?? '');
@@ -25,22 +27,112 @@ export default function SettingsPage() {
   const stripeConnect = useStripeConnect(currentFarmId ?? '');
   const { data: stripeStatus, refetch: refetchStripeStatus } = useStripeStatus(currentFarmId ?? undefined);
   const stripeDisconnect = useStripeDisconnect(currentFarmId ?? '');
-  const updatePaymentSettings = useUpdatePaymentSettings(currentFarmId ?? '');
 
   const [name, setName] = useState('');
   const [timezone, setTimezone] = useState('UTC');
   const [currency, setCurrency] = useState('USD');
   const [weightUnit, setWeightUnit] = useState('oz');
   const [lengthUnit, setLengthUnit] = useState('in');
-  const [error, setError] = useState('');
-  const [success, setSuccess] = useState('');
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
-  const [paymentTiming, setPaymentTiming] = useState('UPFRONT');
 
   // Contact information
   const [phone, setPhone] = useState('');
+  const [phoneCountryCode, setPhoneCountryCode] = useState('+1');
   const [email, setEmail] = useState('');
   const [website, setWebsite] = useState('');
+
+  // Contact validation errors
+  const [emailError, setEmailError] = useState('');
+  const [phoneError, setPhoneError] = useState('');
+  const [websiteError, setWebsiteError] = useState('');
+
+  // Phone country codes with expected digit counts
+  const phoneCountryCodes = [
+    { code: '+1', country: 'US/CA', digits: 10 },
+    { code: '+44', country: 'UK', digits: 10 },
+    { code: '+61', country: 'AU', digits: 9 },
+    { code: '+33', country: 'FR', digits: 9 },
+    { code: '+49', country: 'DE', digits: 10 },
+    { code: '+81', country: 'JP', digits: 10 },
+    { code: '+86', country: 'CN', digits: 11 },
+    { code: '+91', country: 'IN', digits: 10 },
+    { code: '+52', country: 'MX', digits: 10 },
+  ];
+
+  // Validation functions
+  const validateEmail = (value: string): boolean => {
+    if (!value) {
+      setEmailError('');
+      return true; // Email is optional (user already provided email during account creation)
+    }
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(value)) {
+      setEmailError('Please enter a valid email address');
+      return false;
+    }
+    setEmailError('');
+    return true;
+  };
+
+  const validatePhone = (value: string): boolean => {
+    if (!value) {
+      setPhoneError('');
+      return true; // Phone is optional
+    }
+    const digitsOnly = value.replace(/\D/g, '');
+    const countryConfig = phoneCountryCodes.find(c => c.code === phoneCountryCode);
+    const expectedDigits = countryConfig?.digits || 10;
+    if (digitsOnly.length !== expectedDigits) {
+      setPhoneError(`Phone number should be ${expectedDigits} digits for ${countryConfig?.country || 'this country'}`);
+      return false;
+    }
+    setPhoneError('');
+    return true;
+  };
+
+  const validateWebsite = (value: string): boolean => {
+    if (!value) {
+      setWebsiteError('');
+      return true; // Website is optional
+    }
+    try {
+      const url = new URL(value.startsWith('http') ? value : `https://${value}`);
+      if (!url.hostname.includes('.')) {
+        setWebsiteError('Please enter a valid website URL');
+        return false;
+      }
+      setWebsiteError('');
+      return true;
+    } catch {
+      setWebsiteError('Please enter a valid website URL');
+      return false;
+    }
+  };
+
+  // Format phone number as user types
+  const handlePhoneChange = (value: string) => {
+    // Remove all non-digits
+    const digitsOnly = value.replace(/\D/g, '');
+    setPhone(digitsOnly);
+    if (digitsOnly) {
+      validatePhone(digitsOnly);
+    } else {
+      setPhoneError('');
+    }
+  };
+
+  // Format phone for display
+  const formatPhoneDisplay = (digits: string): string => {
+    if (!digits) return '';
+    if (phoneCountryCode === '+1') {
+      // US/CA format: (555) 123-4567
+      if (digits.length <= 3) return `(${digits}`;
+      if (digits.length <= 6) return `(${digits.slice(0, 3)}) ${digits.slice(3)}`;
+      return `(${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6, 10)}`;
+    }
+    // Default: just show digits with spaces every 3-4 digits
+    return digits.replace(/(\d{3,4})(?=\d)/g, '$1 ').trim();
+  };
 
   // Business address
   const [addressLine1, setAddressLine1] = useState('');
@@ -55,6 +147,23 @@ export default function SettingsPage() {
   const [nextInvoiceNumber, setNextInvoiceNumber] = useState(1);
   const [invoiceFooterNotes, setInvoiceFooterNotes] = useState('');
 
+  // Country to currency mapping
+  const countryCurrencyMap: Record<string, string> = {
+    US: 'USD',
+    CA: 'CAD',
+    GB: 'GBP',
+    AU: 'AUD',
+  };
+
+  // Auto-set currency when country changes
+  const handleCountryChange = (newCountry: string) => {
+    setCountry(newCountry);
+    const suggestedCurrency = countryCurrencyMap[newCountry];
+    if (suggestedCurrency) {
+      setCurrency(suggestedCurrency);
+    }
+  };
+
   // Populate form when farm data loads
   useEffect(() => {
     if (farm) {
@@ -63,8 +172,26 @@ export default function SettingsPage() {
       setCurrency(farm.currency || 'USD');
       setWeightUnit(farm.weightUnit || 'oz');
       setLengthUnit(farm.lengthUnit || 'in');
-      // Contact info
-      setPhone(farm.phone || '');
+      // Contact info - parse phone with country code
+      if (farm.phone) {
+        // Try to extract country code from stored phone
+        const phoneMatch = farm.phone.match(/^(\+\d{1,3})\s*(.*)$/);
+        if (phoneMatch) {
+          const [, code, number] = phoneMatch;
+          // Check if we have this country code
+          const knownCode = phoneCountryCodes.find(c => c.code === code);
+          if (knownCode) {
+            setPhoneCountryCode(code);
+          }
+          // Extract just digits from the number part
+          setPhone(number.replace(/\D/g, ''));
+        } else {
+          // No country code found, just use digits
+          setPhone(farm.phone.replace(/\D/g, ''));
+        }
+      } else {
+        setPhone('');
+      }
       setEmail(farm.email || '');
       setWebsite(farm.website || '');
       // Address
@@ -81,35 +208,38 @@ export default function SettingsPage() {
     }
   }, [farm]);
 
-  // Sync payment timing with settings
-  useEffect(() => {
-    if (paymentSettings?.paymentTiming) {
-      setPaymentTiming(paymentSettings.paymentTiming);
-    }
-  }, [paymentSettings]);
-
   // Handle Stripe redirect after onboarding
   useEffect(() => {
     const stripeOnboarding = searchParams.get('stripe_onboarding');
     if (stripeOnboarding === 'complete') {
       refetchStripeStatus();
-      setSuccess('Stripe account connected successfully!');
+      showToast('success', 'Stripe account connected successfully!');
       // Clean up URL
       window.history.replaceState({}, '', window.location.pathname);
     } else if (stripeOnboarding === 'refresh') {
-      setError('Stripe onboarding was interrupted. Please try again.');
+      showToast('error', 'Stripe onboarding was interrupted. Please try again.');
       window.history.replaceState({}, '', window.location.pathname);
     }
-  }, [searchParams, refetchStripeStatus]);
+  }, [searchParams, refetchStripeStatus, showToast]);
 
   const handleSave = async () => {
-    setError('');
-    setSuccess('');
-
     if (!name.trim()) {
-      setError('Farm name is required');
+      showToast('error', 'Farm name is required');
       return;
     }
+
+    // Validate contact information
+    const isEmailValid = validateEmail(email);
+    const isPhoneValid = validatePhone(phone);
+    const isWebsiteValid = validateWebsite(website);
+
+    if (!isEmailValid || !isPhoneValid || !isWebsiteValid) {
+      showToast('error', 'Please fix the validation errors before saving');
+      return;
+    }
+
+    // Format phone with country code for storage
+    const formattedPhone = phone ? `${phoneCountryCode} ${formatPhoneDisplay(phone)}` : undefined;
 
     try {
       await updateFarm.mutateAsync({
@@ -119,7 +249,7 @@ export default function SettingsPage() {
         weightUnit: weightUnit as 'oz' | 'g' | 'lb' | 'kg',
         lengthUnit: lengthUnit as 'in' | 'ft' | 'cm' | 'm',
         // Contact info
-        phone: phone || undefined,
+        phone: formattedPhone,
         email: email || undefined,
         website: website || undefined,
         // Address
@@ -134,10 +264,9 @@ export default function SettingsPage() {
         nextInvoiceNumber,
         invoiceFooterNotes: invoiceFooterNotes || null,
       });
-      setSuccess('Settings saved successfully');
-      setTimeout(() => setSuccess(''), 3000);
+      showToast('success', 'Settings saved successfully');
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to save settings');
+      showToast('error', err instanceof Error ? err.message : 'Failed to save settings');
     }
   };
 
@@ -149,41 +278,27 @@ export default function SettingsPage() {
       setCurrentFarm(null);
       navigate('/');
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to delete farm');
+      showToast('error', err instanceof Error ? err.message : 'Failed to delete farm');
     }
   };
 
   const handleStripeConnect = async () => {
-    setError('');
     try {
       const result = await stripeConnect.mutateAsync();
       // Redirect to Stripe onboarding
       window.location.href = result.url;
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to start Stripe connection');
+      showToast('error', err instanceof Error ? err.message : 'Failed to start Stripe connection');
     }
   };
 
   const handleStripeDisconnect = async () => {
-    setError('');
     try {
       await stripeDisconnect.mutateAsync();
       refetchStripeStatus();
-      setSuccess('Stripe account disconnected');
-      setTimeout(() => setSuccess(''), 3000);
+      showToast('success', 'Stripe account disconnected');
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to disconnect Stripe');
-    }
-  };
-
-  const handlePaymentTimingChange = async (newTiming: string) => {
-    setPaymentTiming(newTiming);
-    try {
-      await updatePaymentSettings.mutateAsync({ paymentTiming: newTiming });
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to update payment settings');
-      // Revert on error
-      setPaymentTiming(paymentSettings?.paymentTiming || 'UPFRONT');
+      showToast('error', err instanceof Error ? err.message : 'Failed to disconnect Stripe');
     }
   };
 
@@ -205,20 +320,8 @@ export default function SettingsPage() {
         <p className="text-muted-foreground">Manage farm settings and preferences</p>
       </div>
 
-      {/* Status messages */}
-      {error && (
-        <div className="p-3 bg-destructive/10 border border-destructive/50 text-destructive rounded-md">
-          {error}
-        </div>
-      )}
-      {success && (
-        <div className="p-3 bg-green-500/10 border border-green-500/50 text-green-600 rounded-md">
-          {success}
-        </div>
-      )}
-
       {/* Farm details */}
-      <div className="border rounded-lg p-6 bg-card space-y-4">
+      <div className="border rounded-lg p-6 bg-card space-y-4" data-tutorial="farm-info">
         <h2 className="text-lg font-semibold">Farm Details</h2>
 
         <div>
@@ -241,93 +344,10 @@ export default function SettingsPage() {
           />
           <p className="text-xs text-muted-foreground mt-1">Used in URLs (cannot be changed)</p>
         </div>
-
-        <div className="grid grid-cols-2 gap-4">
-          <div>
-            <label className="block text-sm font-medium mb-1">Timezone</label>
-            <select
-              value={timezone}
-              onChange={(e) => setTimezone(e.target.value)}
-              className="w-full px-3 py-2 border rounded-md bg-background"
-            >
-              <option value="UTC">UTC</option>
-              <option value="America/New_York">Eastern Time</option>
-              <option value="America/Chicago">Central Time</option>
-              <option value="America/Denver">Mountain Time</option>
-              <option value="America/Los_Angeles">Pacific Time</option>
-            </select>
-          </div>
-          <div>
-            <label className="block text-sm font-medium mb-1">Currency</label>
-            <select
-              value={currency}
-              onChange={(e) => setCurrency(e.target.value)}
-              className="w-full px-3 py-2 border rounded-md bg-background"
-            >
-              <option value="USD">USD ($)</option>
-              <option value="EUR">EUR (€)</option>
-              <option value="GBP">GBP (£)</option>
-              <option value="CAD">CAD ($)</option>
-            </select>
-          </div>
-        </div>
-
-        <button
-          onClick={handleSave}
-          disabled={updateFarm.isPending}
-          className="px-4 py-2 bg-primary text-primary-foreground rounded-md hover:bg-primary/90 disabled:opacity-50"
-        >
-          {updateFarm.isPending ? 'Saving...' : 'Save Changes'}
-        </button>
-      </div>
-
-      {/* Units of Measurement */}
-      <div className="border rounded-lg p-6 bg-card space-y-4">
-        <h2 className="text-lg font-semibold">Units of Measurement</h2>
-        <p className="text-sm text-muted-foreground">
-          Set your preferred units for product weights and lengths. These settings apply throughout the app except for Farm Layout (which uses feet/inches for room dimensions).
-        </p>
-
-        <div className="grid grid-cols-2 gap-4">
-          <div>
-            <label className="block text-sm font-medium mb-1">Product Weight Unit</label>
-            <select
-              value={weightUnit}
-              onChange={(e) => setWeightUnit(e.target.value)}
-              className="w-full px-3 py-2 border rounded-md bg-background"
-            >
-              <option value="oz">Ounces (oz)</option>
-              <option value="g">Grams (g)</option>
-              <option value="lb">Pounds (lb)</option>
-              <option value="kg">Kilograms (kg)</option>
-            </select>
-          </div>
-          <div>
-            <label className="block text-sm font-medium mb-1">Length Unit</label>
-            <select
-              value={lengthUnit}
-              onChange={(e) => setLengthUnit(e.target.value)}
-              className="w-full px-3 py-2 border rounded-md bg-background"
-            >
-              <option value="in">Inches (in)</option>
-              <option value="ft">Feet (ft)</option>
-              <option value="cm">Centimeters (cm)</option>
-              <option value="m">Meters (m)</option>
-            </select>
-          </div>
-        </div>
-
-        <button
-          onClick={handleSave}
-          disabled={updateFarm.isPending}
-          className="px-4 py-2 bg-primary text-primary-foreground rounded-md hover:bg-primary/90 disabled:opacity-50"
-        >
-          {updateFarm.isPending ? 'Saving...' : 'Save Changes'}
-        </button>
       </div>
 
       {/* Business Address */}
-      <div className="border rounded-lg p-6 bg-card space-y-4">
+      <div className="border rounded-lg p-6 bg-card space-y-4" data-tutorial="farm-location">
         <h2 className="text-lg font-semibold">Business Address</h2>
         <p className="text-sm text-muted-foreground">
           Your business address will appear on invoices, packing slips, and other documents.
@@ -336,11 +356,18 @@ export default function SettingsPage() {
         <div className="space-y-4">
           <div>
             <label className="block text-sm font-medium mb-1">Address Line 1</label>
-            <input
-              type="text"
+            <AddressAutocomplete
               value={addressLine1}
-              onChange={(e) => setAddressLine1(e.target.value)}
-              placeholder="123 Farm Road"
+              onChange={setAddressLine1}
+              onAddressSelect={(address) => {
+                setAddressLine1(address.addressLine1);
+                setAddressLine2(address.addressLine2);
+                setCity(address.city);
+                setState(address.state);
+                setPostalCode(address.postalCode);
+                handleCountryChange(address.country);
+              }}
+              placeholder="Start typing an address..."
               className="w-full px-3 py-2 border rounded-md bg-background"
             />
           </div>
@@ -391,7 +418,7 @@ export default function SettingsPage() {
               <label className="block text-sm font-medium mb-1">Country</label>
               <select
                 value={country}
-                onChange={(e) => setCountry(e.target.value)}
+                onChange={(e) => handleCountryChange(e.target.value)}
                 className="w-full px-3 py-2 border rounded-md bg-background"
               >
                 <option value="US">United States</option>
@@ -402,14 +429,6 @@ export default function SettingsPage() {
             </div>
           </div>
         </div>
-
-        <button
-          onClick={handleSave}
-          disabled={updateFarm.isPending}
-          className="px-4 py-2 bg-primary text-primary-foreground rounded-md hover:bg-primary/90 disabled:opacity-50"
-        >
-          {updateFarm.isPending ? 'Saving...' : 'Save Changes'}
-        </button>
       </div>
 
       {/* Contact Information */}
@@ -420,45 +439,155 @@ export default function SettingsPage() {
         </p>
 
         <div className="space-y-4">
-          <div>
-            <label className="block text-sm font-medium mb-1">Phone</label>
-            <input
-              type="tel"
-              value={phone}
-              onChange={(e) => setPhone(e.target.value)}
-              placeholder="(555) 123-4567"
-              className="w-full px-3 py-2 border rounded-md bg-background"
-            />
-          </div>
+          {/* Email */}
           <div>
             <label className="block text-sm font-medium mb-1">Email</label>
             <input
               type="email"
               value={email}
-              onChange={(e) => setEmail(e.target.value)}
+              onChange={(e) => {
+                setEmail(e.target.value);
+                if (emailError) validateEmail(e.target.value);
+              }}
+              onBlur={() => validateEmail(email)}
               placeholder="orders@yourfarm.com"
-              className="w-full px-3 py-2 border rounded-md bg-background"
+              className={`w-full px-3 py-2 border rounded-md bg-background ${emailError ? 'border-destructive' : ''}`}
             />
+            {emailError && (
+              <p className="text-xs text-destructive mt-1">{emailError}</p>
+            )}
           </div>
+
+          {/* Phone with Country Code */}
+          <div>
+            <label className="block text-sm font-medium mb-1">Phone</label>
+            <div className="flex gap-2">
+              <select
+                value={phoneCountryCode}
+                onChange={(e) => {
+                  setPhoneCountryCode(e.target.value);
+                  if (phone) validatePhone(phone);
+                }}
+                className="px-3 py-2 border rounded-md bg-background w-28"
+              >
+                {phoneCountryCodes.map((c) => (
+                  <option key={c.code} value={c.code}>
+                    {c.code} ({c.country})
+                  </option>
+                ))}
+              </select>
+              <input
+                type="tel"
+                value={formatPhoneDisplay(phone)}
+                onChange={(e) => handlePhoneChange(e.target.value)}
+                onBlur={() => validatePhone(phone)}
+                placeholder={phoneCountryCode === '+1' ? '(555) 123-4567' : 'Phone number'}
+                className={`flex-1 px-3 py-2 border rounded-md bg-background ${phoneError ? 'border-destructive' : ''}`}
+              />
+            </div>
+            {phoneError && (
+              <p className="text-xs text-destructive mt-1">{phoneError}</p>
+            )}
+          </div>
+
+          {/* Website */}
           <div>
             <label className="block text-sm font-medium mb-1">Website</label>
             <input
               type="url"
               value={website}
-              onChange={(e) => setWebsite(e.target.value)}
+              onChange={(e) => {
+                setWebsite(e.target.value);
+                if (websiteError) validateWebsite(e.target.value);
+              }}
+              onBlur={() => validateWebsite(website)}
               placeholder="https://yourfarm.com"
-              className="w-full px-3 py-2 border rounded-md bg-background"
+              className={`w-full px-3 py-2 border rounded-md bg-background ${websiteError ? 'border-destructive' : ''}`}
             />
+            {websiteError && (
+              <p className="text-xs text-destructive mt-1">{websiteError}</p>
+            )}
           </div>
         </div>
+      </div>
 
-        <button
-          onClick={handleSave}
-          disabled={updateFarm.isPending}
-          className="px-4 py-2 bg-primary text-primary-foreground rounded-md hover:bg-primary/90 disabled:opacity-50"
-        >
-          {updateFarm.isPending ? 'Saving...' : 'Save Changes'}
-        </button>
+      {/* Timezone & Currency */}
+      <div className="border rounded-lg p-6 bg-card space-y-4">
+        <h2 className="text-lg font-semibold">Timezone & Currency</h2>
+        <p className="text-sm text-muted-foreground">
+          Set your timezone for scheduling and your preferred currency for pricing.
+        </p>
+
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className="block text-sm font-medium mb-1">Timezone</label>
+            <select
+              value={timezone}
+              onChange={(e) => setTimezone(e.target.value)}
+              className="w-full px-3 py-2 border rounded-md bg-background"
+            >
+              <option value="UTC">UTC</option>
+              <option value="America/New_York">Eastern Time</option>
+              <option value="America/Chicago">Central Time</option>
+              <option value="America/Denver">Mountain Time</option>
+              <option value="America/Los_Angeles">Pacific Time</option>
+              <option value="Europe/London">London (GMT)</option>
+              <option value="Europe/Paris">Paris (CET)</option>
+              <option value="Australia/Sydney">Sydney (AEST)</option>
+            </select>
+          </div>
+          <div>
+            <label className="block text-sm font-medium mb-1">Currency</label>
+            <select
+              value={currency}
+              onChange={(e) => setCurrency(e.target.value)}
+              className="w-full px-3 py-2 border rounded-md bg-background"
+            >
+              <option value="USD">USD ($)</option>
+              <option value="EUR">EUR (€)</option>
+              <option value="GBP">GBP (£)</option>
+              <option value="CAD">CAD ($)</option>
+              <option value="AUD">AUD ($)</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      {/* Preferred Unit of Measurement */}
+      <div className="border rounded-lg p-6 bg-card space-y-4">
+        <h2 className="text-lg font-semibold">Preferred Unit of Measurement</h2>
+        <p className="text-sm text-muted-foreground">
+          Set your preferred units for product weights and lengths. You can change these at any point.
+        </p>
+
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className="block text-sm font-medium mb-1">Product Weight Unit</label>
+            <select
+              value={weightUnit}
+              onChange={(e) => setWeightUnit(e.target.value)}
+              className="w-full px-3 py-2 border rounded-md bg-background"
+            >
+              <option value="oz">Ounces (oz)</option>
+              <option value="g">Grams (g)</option>
+              <option value="lb">Pounds (lb)</option>
+              <option value="kg">Kilograms (kg)</option>
+            </select>
+          </div>
+          <div>
+            <label className="block text-sm font-medium mb-1">Length Unit</label>
+            <select
+              value={lengthUnit}
+              onChange={(e) => setLengthUnit(e.target.value)}
+              className="w-full px-3 py-2 border rounded-md bg-background"
+            >
+              <option value="in">Inches (in)</option>
+              <option value="ft">Feet (ft)</option>
+              <option value="cm">Centimeters (cm)</option>
+              <option value="m">Meters (m)</option>
+            </select>
+          </div>
+        </div>
       </div>
 
       {/* Document Settings */}
@@ -512,14 +641,6 @@ export default function SettingsPage() {
             </p>
           </div>
         </div>
-
-        <button
-          onClick={handleSave}
-          disabled={updateFarm.isPending}
-          className="px-4 py-2 bg-primary text-primary-foreground rounded-md hover:bg-primary/90 disabled:opacity-50"
-        >
-          {updateFarm.isPending ? 'Saving...' : 'Save Changes'}
-        </button>
       </div>
 
       {/* Team */}
@@ -610,25 +731,6 @@ export default function SettingsPage() {
               <span className="text-sm text-muted-foreground">Coming soon</span>
             </div>
 
-            <hr />
-
-            {/* Payment Timing */}
-            <div className="space-y-2">
-              <label className="block font-medium">Payment Timing</label>
-              <p className="text-sm text-muted-foreground">
-                When should customers pay for their orders?
-              </p>
-              <select
-                value={paymentTiming}
-                onChange={(e) => handlePaymentTimingChange(e.target.value)}
-                disabled={updatePaymentSettings.isPending}
-                className="w-full max-w-xs px-3 py-2 border rounded-md bg-background disabled:opacity-50"
-              >
-                <option value="UPFRONT">Payment upfront (when order placed)</option>
-                <option value="ON_READY">Payment on ready (when order is ready for pickup)</option>
-              </select>
-            </div>
-
             {/* Platform Fee Info */}
             <div className="p-3 bg-muted/50 rounded-md">
               <p className="text-sm text-muted-foreground">
@@ -637,6 +739,60 @@ export default function SettingsPage() {
             </div>
           </div>
         )}
+      </div>
+
+      {/* Save / Cancel Buttons */}
+      <div className="flex gap-3 pt-4 border-t">
+        <button
+          onClick={handleSave}
+          disabled={updateFarm.isPending}
+          className="px-6 py-2 bg-primary text-primary-foreground rounded-md hover:bg-primary/90 disabled:opacity-50"
+        >
+          {updateFarm.isPending ? 'Saving...' : 'Save Changes'}
+        </button>
+        <button
+          onClick={() => {
+            // Reset form to original values
+            if (farm) {
+              setName(farm.name || '');
+              setTimezone(farm.timezone || 'UTC');
+              setCurrency(farm.currency || 'USD');
+              setWeightUnit(farm.weightUnit || 'oz');
+              setLengthUnit(farm.lengthUnit || 'in');
+              if (farm.phone) {
+                const phoneMatch = farm.phone.match(/^(\+\d{1,3})\s*(.*)$/);
+                if (phoneMatch) {
+                  const [, code, number] = phoneMatch;
+                  const knownCode = phoneCountryCodes.find(c => c.code === code);
+                  if (knownCode) setPhoneCountryCode(code);
+                  setPhone(number.replace(/\D/g, ''));
+                } else {
+                  setPhone(farm.phone.replace(/\D/g, ''));
+                }
+              } else {
+                setPhone('');
+              }
+              setEmail(farm.email || '');
+              setWebsite(farm.website || '');
+              setAddressLine1(farm.addressLine1 || '');
+              setAddressLine2(farm.addressLine2 || '');
+              setCity(farm.city || '');
+              setState(farm.state || '');
+              setPostalCode(farm.postalCode || '');
+              setCountry(farm.country || 'US');
+              setInvoicePrefix(farm.invoicePrefix || 'INV');
+              setNextInvoiceNumber(farm.nextInvoiceNumber || 1);
+              setInvoiceFooterNotes(farm.invoiceFooterNotes || '');
+            }
+            // Clear validation errors
+            setEmailError('');
+            setPhoneError('');
+            setWebsiteError('');
+          }}
+          className="px-6 py-2 border rounded-md hover:bg-accent"
+        >
+          Cancel
+        </button>
       </div>
 
       {/* Danger zone */}

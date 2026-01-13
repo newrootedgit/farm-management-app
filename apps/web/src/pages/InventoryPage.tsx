@@ -1,5 +1,7 @@
 import { useState, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useFarmStore } from '@/stores/farm-store';
+import { useToast } from '@/components/ui/Toast';
 import {
   useProducts,
   useCreateProduct,
@@ -75,6 +77,7 @@ const emptySkuForm: SkuFormData = {
 
 export default function InventoryPage() {
   const { currentFarmId } = useFarmStore();
+  const { showToast } = useToast();
   const { data: products, isLoading } = useProducts(currentFarmId ?? undefined);
   const createProduct = useCreateProduct(currentFarmId ?? '');
   const updateProduct = useUpdateProduct(currentFarmId ?? '');
@@ -93,8 +96,12 @@ export default function InventoryPage() {
   const deletePackageType = useDeletePackageType(currentFarmId ?? '');
   const seedDefaultPackageTypes = useSeedDefaultPackageTypes(currentFarmId ?? '');
 
-  // Tab state
-  const [activeTab, setActiveTab] = useState<'varieties' | 'mixes'>('varieties');
+  // Tab state - support URL param ?tab=mixes for deep linking
+  const [searchParams] = useSearchParams();
+  const tabParam = searchParams.get('tab');
+  const [activeTab, setActiveTab] = useState<'varieties' | 'mixes'>(
+    tabParam === 'mixes' ? 'mixes' : 'varieties'
+  );
 
   const [showProductForm, setShowProductForm] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
@@ -225,8 +232,10 @@ export default function InventoryPage() {
     try {
       if (editingProduct) {
         await updateProduct.mutateAsync({ productId: editingProduct.id, data });
+        showToast('success', 'Variety updated successfully');
       } else {
         await createProduct.mutateAsync(data);
+        showToast('success', 'Variety created successfully');
       }
       handleCloseProductForm();
     } catch (err) {
@@ -242,8 +251,9 @@ export default function InventoryPage() {
       if (expandedProductId === productId) {
         setExpandedProductId(null);
       }
+      showToast('success', 'Variety deleted');
     } catch (err) {
-      alert(err instanceof Error ? err.message : 'Failed to delete variety');
+      showToast('error', err instanceof Error ? err.message : 'Failed to delete variety');
     }
   };
 
@@ -372,8 +382,10 @@ export default function InventoryPage() {
     try {
       if (editingSku) {
         await updateSku.mutateAsync({ skuId: editingSku.id, data });
+        showToast('success', 'SKU updated successfully');
       } else {
         await createSku.mutateAsync(data as CreateSku);
+        showToast('success', 'SKU created successfully');
       }
       handleCloseSkuForm();
     } catch (err) {
@@ -385,8 +397,9 @@ export default function InventoryPage() {
     if (!confirm('Are you sure you want to delete this SKU?')) return;
     try {
       await deleteSku.mutateAsync(skuId);
+      showToast('success', 'SKU deleted');
     } catch (err) {
-      alert(err instanceof Error ? err.message : 'Failed to delete SKU');
+      showToast('error', err instanceof Error ? err.message : 'Failed to delete SKU');
     }
   };
 
@@ -420,43 +433,14 @@ export default function InventoryPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold">Varieties & Mixes</h1>
-          <p className="text-muted-foreground">Manage crop varieties, mixes, and production parameters</p>
-        </div>
-        {activeTab === 'varieties' && (
-          <button
-            onClick={() => handleOpenProductForm()}
-            className="px-4 py-2 bg-primary text-primary-foreground rounded-md hover:bg-primary/90"
-          >
-            Add Variety
-          </button>
-        )}
-        {activeTab === 'mixes' && (
-          <button
-            onClick={() => {
-              setEditingBlend(null);
-              setMixName('');
-              setMixDescription('');
-              setMixIsActive(true);
-              setMixIngredients([
-                { productId: '', ratioPercent: '' },
-                { productId: '', ratioPercent: '' },
-              ]);
-              setMixError(null);
-              setShowMixForm(true);
-            }}
-            className="px-4 py-2 bg-primary text-primary-foreground rounded-md hover:bg-primary/90"
-          >
-            Create Mix
-          </button>
-        )}
+      <div>
+        <h1 className="text-2xl font-bold">Varieties & Mixes</h1>
+        <p className="text-muted-foreground">Manage crop varieties, mixes, and production parameters</p>
       </div>
 
-      {/* Tabs */}
+      {/* Tabs with action buttons */}
       <div className="border-b">
-        <nav className="flex gap-4">
+        <nav className="flex items-center gap-4">
           <button
             onClick={() => setActiveTab('varieties')}
             className={`pb-3 px-1 text-sm font-medium border-b-2 transition-colors ${
@@ -477,6 +461,35 @@ export default function InventoryPage() {
           >
             Mixes ({blends?.length ?? 0})
           </button>
+          {activeTab === 'varieties' && (
+            <button
+              onClick={() => handleOpenProductForm()}
+              className="px-3 py-1 mb-2 bg-primary text-primary-foreground rounded-md hover:bg-primary/90 text-sm"
+              data-tutorial="add-product"
+            >
+              + Add Variety
+            </button>
+          )}
+          {activeTab === 'mixes' && (
+            <button
+              onClick={() => {
+                setEditingBlend(null);
+                setMixName('');
+                setMixDescription('');
+                setMixIsActive(true);
+                setMixIngredients([
+                  { productId: '', ratioPercent: '' },
+                  { productId: '', ratioPercent: '' },
+                ]);
+                setMixError(null);
+                setShowMixForm(true);
+              }}
+              className="px-3 py-1 mb-2 bg-primary text-primary-foreground rounded-md hover:bg-primary/90 text-sm"
+              data-tutorial="add-blend"
+            >
+              + Create Mix
+            </button>
+          )}
         </nav>
       </div>
 
@@ -628,6 +641,7 @@ export default function InventoryPage() {
                             <button
                               onClick={() => handleOpenSkuForm(product.id)}
                               className="px-3 py-1 text-sm bg-primary text-primary-foreground rounded hover:bg-primary/90"
+                              data-tutorial="add-sku"
                             >
                               Add SKU
                             </button>

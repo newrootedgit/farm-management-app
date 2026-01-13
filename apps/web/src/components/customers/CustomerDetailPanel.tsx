@@ -1,6 +1,7 @@
 import { useMemo } from 'react';
 import { X, RefreshCw, Package, Calendar, TrendingUp, Mail, Phone, MapPin, Building2 } from 'lucide-react';
 import { useOrders } from '@/lib/api-client';
+import { useEscapeKey } from '@/hooks/useEscapeKey';
 import { formatPaymentTerms, formatCustomerType } from '@farm/shared';
 import type { Customer, CustomerTag, OrderWithItems } from '@farm/shared';
 
@@ -19,6 +20,9 @@ export function CustomerDetailPanel({
   onReorder,
   onCreateOrder,
 }: CustomerDetailPanelProps) {
+  // Close on ESC key
+  useEscapeKey(true, onClose);
+
   // Use useOrders with customer filter to get orders with items
   const { data: allOrders, isLoading: ordersLoading } = useOrders(farmId, { customer: customer.name });
   const orders = allOrders?.filter(o => o.customer === customer.name);

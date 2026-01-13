@@ -2,6 +2,7 @@ import { useState } from 'react';
 import type { ElementPreset, ElementType, UpdateElementPreset, CreateElementPreset, UnitSystem } from '@farm/shared';
 import { DEFAULT_ELEMENT_COLORS, DEFAULT_ELEMENT_DIMENSIONS } from '@farm/shared';
 import { getUnitLabel, fromBaseUnit, toBaseUnit } from '@/lib/units';
+import { useEscapeKey } from '@/hooks/useEscapeKey';
 
 const ELEMENT_TYPES: { value: ElementType; label: string }[] = [
   { value: 'GROW_RACK', label: 'Grow Rack' },
@@ -56,6 +57,9 @@ export function PresetManagerModal({
   const [mode, setMode] = useState<'list' | 'create' | 'edit'>('list');
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState<PresetFormData>(INITIAL_FORM);
+
+  // Close on ESC key
+  useEscapeKey(isOpen, onClose);
 
   const unitLabel = getUnitLabel(unitSystem);
 

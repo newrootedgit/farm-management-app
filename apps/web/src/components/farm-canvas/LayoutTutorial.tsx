@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useEscapeKey } from '@/hooks/useEscapeKey';
 
 interface TutorialStep {
   title: string;
@@ -62,6 +63,9 @@ interface LayoutTutorialProps {
 
 export function LayoutTutorial({ onComplete, onSkip }: LayoutTutorialProps) {
   const [currentStep, setCurrentStep] = useState(0);
+
+  // Close on ESC key
+  useEscapeKey(true, onSkip);
 
   const step = TUTORIAL_STEPS[currentStep];
   const isFirstStep = currentStep === 0;

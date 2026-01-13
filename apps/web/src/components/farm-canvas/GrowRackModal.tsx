@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useCanvasStore, generateId, type CanvasElement } from '@/stores/canvas-store';
 import { toBaseUnit, fromBaseUnit, getUnitLabel } from '@/lib/units';
+import { useEscapeKey } from '@/hooks/useEscapeKey';
 import type { UnitSystem } from '@farm/shared';
 import { DEFAULT_ELEMENT_COLORS } from '@farm/shared';
 
@@ -41,6 +42,9 @@ export function GrowRackModal({
 }: GrowRackModalProps) {
   const { addElement, updateElement, setSelectedId } = useCanvasStore();
   const unitLabel = getUnitLabel(unitSystem);
+
+  // Close on ESC key
+  useEscapeKey(isOpen, onClose);
 
   const [formData, setFormData] = useState<GrowRackFormData>({
     name: '',

@@ -589,6 +589,7 @@ export default function StorePage() {
                           className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
                             sku.isAvailable ? 'bg-green-500' : 'bg-gray-300'
                           }`}
+                          data-tutorial="sku-toggle"
                         >
                           <span
                             className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${

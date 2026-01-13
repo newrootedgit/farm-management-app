@@ -1,5 +1,6 @@
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { AppShell } from './components/layout';
+import { TutorialProvider } from './components/tutorial';
 import { useUserStore } from './stores/user-store';
 import Dashboard from './pages/Dashboard';
 import FarmLayout from './pages/FarmLayout';
@@ -57,8 +58,9 @@ function App() {
         path="/*"
         element={
           <ProtectedRoute>
-            <AppShell>
-              <Routes>
+            <TutorialProvider>
+              <AppShell>
+                <Routes>
                 <Route path="/" element={<Dashboard />} />
                 <Route path="/operations" element={<OperationsPage />} />
                 <Route path="/orders" element={<PlanningPage />} />
@@ -75,7 +77,8 @@ function App() {
                 <Route path="/settings" element={<SettingsPage />} />
                 <Route path="/user-settings" element={<UserSettingsPage />} />
               </Routes>
-            </AppShell>
+              </AppShell>
+            </TutorialProvider>
           </ProtectedRoute>
         }
       />

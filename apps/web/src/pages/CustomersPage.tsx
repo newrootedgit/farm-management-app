@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useFarmStore } from '@/stores/farm-store';
+import { useToast } from '@/components/ui/Toast';
 import {
   useCustomers,
   useCreateCustomer,
@@ -67,6 +68,7 @@ const PAYMENT_TERMS = [
 
 export default function CustomersPage() {
   const { currentFarmId } = useFarmStore();
+  const { showToast } = useToast();
   const [searchQuery, setSearchQuery] = useState('');
   const [filterType, setFilterType] = useState<string>('');
   const [showInactive, setShowInactive] = useState(false);
@@ -171,8 +173,10 @@ export default function CustomersPage() {
           customerId: editingCustomer.id,
           data: customerData,
         });
+        showToast('success', 'Customer updated successfully');
       } else {
         await createCustomer.mutateAsync(customerData);
+        showToast('success', 'Customer added successfully');
       }
       handleCloseForm();
     } catch (err) {
@@ -184,8 +188,9 @@ export default function CustomersPage() {
     if (confirm('Are you sure you want to deactivate this customer?')) {
       try {
         await deleteCustomer.mutateAsync(customerId);
+        showToast('success', 'Customer deactivated');
       } catch (err) {
-        alert(err instanceof Error ? err.message : 'Failed to delete customer');
+        showToast('error', err instanceof Error ? err.message : 'Failed to delete customer');
       }
     }
   };
@@ -242,6 +247,7 @@ export default function CustomersPage() {
           <button
             onClick={() => handleOpenForm()}
             className="px-4 py-2 bg-primary text-primary-foreground rounded-md hover:bg-primary/90"
+            data-tutorial="add-customer"
           >
             Add Customer
           </button>

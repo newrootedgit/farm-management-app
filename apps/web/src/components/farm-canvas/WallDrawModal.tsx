@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useCanvasStore, generateId, CanvasElement } from '@/stores/canvas-store';
 import { toBaseUnit, getUnitLabel, calculateEndpoint, getDirectionAngle } from '@/lib/units';
+import { useEscapeKey } from '@/hooks/useEscapeKey';
 import { DEFAULT_ELEMENT_COLORS, DEFAULT_ELEMENT_DIMENSIONS } from '@farm/shared';
 import type { UnitSystem } from '@farm/shared';
 
@@ -28,6 +29,9 @@ export function WallDrawModal({
   const [thickness, setThickness] = useState('0.3');
 
   const { addElement, setSelectedId, elements, resetWallDrawing } = useCanvasStore();
+
+  // Close on ESC key
+  useEscapeKey(isOpen, onClose);
 
   if (!isOpen) return null;
 

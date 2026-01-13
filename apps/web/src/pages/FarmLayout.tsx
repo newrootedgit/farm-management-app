@@ -357,9 +357,14 @@ export default function FarmLayout() {
         return;
       }
 
-      // Escape = Deselect / Cancel
+      // Escape = Cancel edit mode or deselect
       if (e.key === 'Escape') {
         e.preventDefault();
+        if (isEditMode) {
+          // Exit edit mode and revert changes
+          revertToSaved();
+          setEditMode(false);
+        }
         clearSelection();
         setSelectedElement(null);
         setSelectedElements([]);
@@ -407,6 +412,8 @@ export default function FarmLayout() {
     resetWallDrawing,
     setActiveTool,
     isEditMode,
+    revertToSaved,
+    setEditMode,
   ]);
 
   // Handle save

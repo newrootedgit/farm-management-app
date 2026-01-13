@@ -1,15 +1,53 @@
-import { useState, useMemo, useCallback } from 'react';
+import { useState, useMemo, useCallback, useRef, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useFarmStore } from '@/stores/farm-store';
-import { useTasks, useCompleteTask, useCreateRackAssignment } from '@/lib/api-client';
+import { useTasks, useCompleteTask, useCreateRackAssignment, useUpdateTask, useUpdateOrder } from '@/lib/api-client';
 import TaskCalendar from '@/components/operations/TaskCalendar';
 import SeedingView from '@/components/operations/SeedingView';
 import TransplantView from '@/components/operations/TransplantView';
 import HarvestView from '@/components/operations/HarvestView';
 import { RackSelector, type RackAllocation } from '@/components/operations/RackSelector';
-import { BulkActionBar, type BulkCompleteData } from '@/components/operations/BulkActionBar';
+import { LogViewerModal, type LogEditData } from '@/components/operations/LogViewerModal';
+import { useToast } from '@/components/ui/Toast';
 import type { Task } from '@farm/shared';
 
-type ViewMode = 'all' | 'calendar' | 'seeding' | 'transplant' | 'harvest';
+type ViewMode = 'all' | 'calendar' | 'seeding' | 'transplant' | 'harvest' | 'logs';
+
+// Helper function to check if a task is overdue
+// Tasks are overdue if:
+// 1. They have a due date in the past AND
+// 2. They are either not completed, OR completed but missing log data
+const isOverdue = (task: Task): boolean => {
+  if (!task.dueDate) return false;
+  if (task.status === 'CANCELLED') return false;
+
+  // Check if due date is in the past
+  const dueDate = new Date(task.dueDate);
+  dueDate.setHours(23, 59, 59, 999); // End of due date
+  const isPastDue = dueDate < new Date();
+
+  if (!isPastDue) return false;
+
+  // If not completed, it's overdue
+  if (task.status !== 'COMPLETED') return true;
+
+  // If completed but missing log data, it's still overdue
+  // (wasn't properly completed)
+  if (!task.completedBy) return true;
+
+  return false;
+};
+
+// Helper function to get the past tense action label for a task type
+const getTaskActionLabel = (type: string): string => {
+  switch (type) {
+    case 'SOAK': return 'Soaked';
+    case 'SEED': return 'Seeded';
+    case 'MOVE_TO_LIGHT': return 'Transplanted';
+    case 'HARVESTING': return 'Harvested';
+    default: return 'Completed';
+  }
+};
 
 interface TaskLogFormData {
   completedBy: string;
@@ -42,14 +80,33 @@ export default function OperationsPage() {
   const { data: tasks, isLoading } = useTasks(currentFarmId ?? undefined);
   const completeTask = useCompleteTask(currentFarmId ?? '');
   const createRackAssignment = useCreateRackAssignment(currentFarmId ?? '');
+  const updateTask = useUpdateTask(currentFarmId ?? '');
+  const updateOrder = useUpdateOrder(currentFarmId ?? '');
+  const { showToast } = useToast();
+  const logModalRef = useRef<HTMLDivElement>(null);
 
-  const [viewMode, setViewMode] = useState<ViewMode>('calendar');
+  // View mode - support URL param ?tab=seeding for deep linking from tutorial
+  const [searchParams] = useSearchParams();
+  const tabParam = searchParams.get('tab') as ViewMode | null;
+  const validTabs: ViewMode[] = ['all', 'calendar', 'seeding', 'transplant', 'harvest', 'logs'];
+  const [viewMode, setViewMode] = useState<ViewMode>(
+    tabParam && validTabs.includes(tabParam) ? tabParam : 'calendar'
+  );
+
+  // Sync view mode when URL param changes (for same-page navigation)
+  useEffect(() => {
+    if (tabParam && validTabs.includes(tabParam)) {
+      setViewMode(tabParam);
+    }
+  }, [tabParam]);
+
   const [loggingTask, setLoggingTask] = useState<Task | null>(null);
   const [logForm, setLogForm] = useState<TaskLogFormData>(getDefaultFormData());
   const [logError, setLogError] = useState<string | null>(null);
   const [showCompleted, setShowCompleted] = useState(false);
-  const [selectedTaskIds, setSelectedTaskIds] = useState<Set<string>>(new Set());
-  const [isBulkCompleting, setIsBulkCompleting] = useState(false);
+  const [showOverdue, setShowOverdue] = useState(true);
+  const [viewingLog, setViewingLog] = useState<Task | null>(null);
+  const [showOverdueModal, setShowOverdueModal] = useState(false);
 
   if (!currentFarmId) {
     return (
@@ -75,7 +132,11 @@ export default function OperationsPage() {
     return tasks
       .filter((task) => {
         if (!productionTaskTypes.includes(task.type)) return false;
-        if (!showCompleted && task.status === 'COMPLETED') return false;
+        // "Show completed" only hides tasks that are FULLY completed (have log data)
+        // Overdue tasks should always be visible unless "Show overdue" is unchecked
+        const isFullyCompleted = task.status === 'COMPLETED' && task.completedBy;
+        if (!showCompleted && isFullyCompleted) return false;
+        if (!showOverdue && isOverdue(task)) return false;
         return true;
       })
       .sort((a, b) => {
@@ -83,7 +144,7 @@ export default function OperationsPage() {
         if (!b.dueDate) return -1;
         return new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime();
       });
-  }, [tasks, showCompleted]);
+  }, [tasks, showCompleted, showOverdue]);
 
 
   // Group tasks by date
@@ -145,11 +206,43 @@ export default function OperationsPage() {
 
     if (!logForm.completedBy.trim()) {
       setLogError('Please enter your name');
+      // Scroll to top of modal to show error
+      logModalRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
       return;
     }
 
     // Combine date and time into ISO string
     const completedAt = new Date(`${logForm.completedDate}T${logForm.completedTime}`);
+    const productName = loggingTask.orderItem?.product?.name || 'Task';
+
+    // Calculate if task is late and generate auto-note
+    let finalNotes = logForm.completionNotes.trim();
+
+    if (loggingTask.dueDate) {
+      const dueDate = new Date(loggingTask.dueDate);
+      dueDate.setHours(0, 0, 0, 0);
+
+      const completedDate = new Date(logForm.completedDate);
+      completedDate.setHours(0, 0, 0, 0);
+
+      const diffDays = Math.floor((completedDate.getTime() - dueDate.getTime()) / (1000 * 60 * 60 * 24));
+
+      if (diffDays > 0) {
+        // Task type friendly names
+        const typeNames: Record<string, string> = {
+          SOAK: 'Soaking',
+          SEED: 'Seeding',
+          MOVE_TO_LIGHT: 'Move to light',
+          HARVESTING: 'Harvest',
+        };
+        const typeName = typeNames[loggingTask.type] || loggingTask.type;
+        const dayWord = diffDays === 1 ? 'day' : 'days';
+        const lateNote = `⚠️ ${typeName} ${diffDays} ${dayWord} late.`;
+
+        // Prepend to user notes
+        finalNotes = finalNotes ? `${lateNote}\n${finalNotes}` : lateNote;
+      }
+    }
 
     try {
       // Complete the task
@@ -157,7 +250,7 @@ export default function OperationsPage() {
         taskId: loggingTask.id,
         data: {
           completedBy: logForm.completedBy.trim(),
-          completionNotes: logForm.completionNotes.trim() || undefined,
+          completionNotes: finalNotes || undefined,
           actualTrays: logForm.actualTrays ? parseInt(logForm.actualTrays) : undefined,
           actualYieldOz: logForm.actualYieldOz ? parseFloat(logForm.actualYieldOz) : undefined,
           seedLot: logForm.seedLot.trim() || undefined,
@@ -185,9 +278,14 @@ export default function OperationsPage() {
         }
       }
 
+      // Show success message and close modal
+      showToast('success', `${productName} log completed successfully`);
       handleCloseLog();
     } catch (err) {
-      setLogError(err instanceof Error ? err.message : 'Failed to complete task');
+      const errorMessage = err instanceof Error ? err.message : 'Failed to complete task';
+      setLogError(errorMessage);
+      // Scroll to top of modal to show error
+      logModalRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
     }
   };
 
@@ -239,24 +337,33 @@ export default function OperationsPage() {
     return info[type] || { label: type, icon: '📋', color: 'text-gray-800', bgColor: 'bg-gray-100' };
   };
 
-  // Stats
+  // Stats - a task is only "completed" if it has log data (completedBy filled in)
   const todayPending = tasks?.filter((t) => {
-    if (!t.dueDate || t.status === 'COMPLETED') return false;
+    if (!t.dueDate) return false;
+    // Task is pending if it doesn't have log data
+    const isFullyComplete = t.status === 'COMPLETED' && t.completedBy;
+    if (isFullyComplete) return false;
     const due = new Date(t.dueDate);
     due.setHours(0, 0, 0, 0);
     return due.getTime() === today.getTime() && productionTaskTypes.includes(t.type);
   }).length ?? 0;
 
   const todayCompleted = tasks?.filter((t) => {
-    if (!t.dueDate || t.status !== 'COMPLETED') return false;
+    if (!t.dueDate) return false;
+    // Task is only completed if it has log data
+    const isFullyComplete = t.status === 'COMPLETED' && t.completedBy;
+    if (!isFullyComplete) return false;
     const due = new Date(t.dueDate);
     due.setHours(0, 0, 0, 0);
     return due.getTime() === today.getTime() && productionTaskTypes.includes(t.type);
   }).length ?? 0;
 
   const weekPending = tasks?.filter((t) => {
-    if (!t.dueDate || t.status === 'COMPLETED') return false;
+    if (!t.dueDate) return false;
     if (!productionTaskTypes.includes(t.type)) return false;
+    // Task is pending if it doesn't have log data
+    const isFullyComplete = t.status === 'COMPLETED' && t.completedBy;
+    if (isFullyComplete) return false;
     const due = new Date(t.dueDate);
     due.setHours(0, 0, 0, 0);
     const weekEnd = new Date(today);
@@ -264,91 +371,153 @@ export default function OperationsPage() {
     return due >= today && due <= weekEnd;
   }).length ?? 0;
 
-  // Get selected tasks as array
-  const selectedTasks = useMemo(() => {
+  const overdueCount = tasks?.filter((t) => {
+    if (!productionTaskTypes.includes(t.type)) return false;
+    return isOverdue(t);
+  }).length ?? 0;
+
+  // Completed tasks for logs view (grouped by completion date)
+  // Only include tasks that have proper log data (completedBy filled in)
+  const completedTasks = useMemo(() => {
     if (!tasks) return [];
-    return tasks.filter((t) => selectedTaskIds.has(t.id) && t.status !== 'COMPLETED');
-  }, [tasks, selectedTaskIds]);
+    return tasks
+      .filter((t) => t.status === 'COMPLETED' && productionTaskTypes.includes(t.type) && t.completedBy)
+      .sort((a, b) => {
+        const dateA = a.completedAt ? new Date(a.completedAt).getTime() : 0;
+        const dateB = b.completedAt ? new Date(b.completedAt).getTime() : 0;
+        return dateB - dateA; // Most recent first
+      });
+  }, [tasks]);
 
-  // Toggle task selection
-  const toggleTaskSelection = useCallback((taskId: string, e?: React.MouseEvent) => {
-    if (e) {
-      e.stopPropagation();
-    }
-    setSelectedTaskIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(taskId)) {
-        next.delete(taskId);
-      } else {
-        next.add(taskId);
+  // Tasks that are marked COMPLETED but missing log data
+  const tasksMissingLog = useMemo(() => {
+    if (!tasks) return [];
+    return tasks
+      .filter((t) => t.status === 'COMPLETED' && productionTaskTypes.includes(t.type) && !t.completedBy)
+      .sort((a, b) => {
+        const dateA = a.dueDate ? new Date(a.dueDate).getTime() : 0;
+        const dateB = b.dueDate ? new Date(b.dueDate).getTime() : 0;
+        return dateA - dateB; // Oldest first
+      });
+  }, [tasks]);
+
+  // Overdue tasks list
+  const overdueTasks = useMemo(() => {
+    if (!tasks) return [];
+    return tasks
+      .filter((t) => productionTaskTypes.includes(t.type) && isOverdue(t))
+      .sort((a, b) => {
+        const dateA = a.dueDate ? new Date(a.dueDate).getTime() : 0;
+        const dateB = b.dueDate ? new Date(b.dueDate).getTime() : 0;
+        return dateA - dateB; // Oldest first (most overdue)
+      });
+  }, [tasks]);
+
+  const completedByDate = useMemo(() => {
+    const grouped: Record<string, Task[]> = {};
+    completedTasks.forEach((task) => {
+      const dateKey = task.completedAt
+        ? new Date(task.completedAt).toDateString()
+        : 'Unknown';
+      if (!grouped[dateKey]) {
+        grouped[dateKey] = [];
       }
-      return next;
+      grouped[dateKey].push(task);
     });
-  }, []);
+    return grouped;
+  }, [completedTasks]);
 
-  // Clear all selections
-  const clearSelection = useCallback(() => {
-    setSelectedTaskIds(new Set());
-  }, []);
+  // Handle saving edits to a log
+  const handleSaveLogEdit = useCallback(async (taskId: string, data: LogEditData) => {
+    // Get the task being edited
+    const task = viewingLog;
 
-  // Handle bulk complete
-  const handleBulkComplete = useCallback(async (data: BulkCompleteData) => {
-    if (selectedTasks.length === 0) return;
+    await updateTask.mutateAsync({
+      taskId,
+      data: {
+        completedBy: data.completedBy,
+        completionNotes: data.completionNotes,
+        actualTrays: data.actualTrays,
+        seedLot: data.seedLot,
+        completedAt: data.completedAt ? new Date(data.completedAt) : undefined,
+      },
+    });
 
-    setIsBulkCompleting(true);
-    const completedAt = new Date(`${data.completedDate}T${data.completedTime}`);
+    // If completion date differs from due date, add a note to the order
+    if (task && data.completedAt && task.dueDate && task.orderItem?.order?.id) {
+      const completedDate = new Date(data.completedAt);
+      completedDate.setHours(0, 0, 0, 0);
 
-    try {
-      // Complete all selected tasks in parallel
-      await Promise.all(
-        selectedTasks.map((task) =>
-          completeTask.mutateAsync({
-            taskId: task.id,
-            data: {
-              completedBy: data.completedBy.trim(),
-              completionNotes: data.completionNotes?.trim() || undefined,
-              completedAt: completedAt.toISOString(),
-            },
-          })
-        )
-      );
+      const dueDate = new Date(task.dueDate);
+      dueDate.setHours(0, 0, 0, 0);
 
-      // Clear selection after successful completion
-      clearSelection();
-    } finally {
-      setIsBulkCompleting(false);
+      const daysDiff = Math.round((completedDate.getTime() - dueDate.getTime()) / (1000 * 60 * 60 * 24));
+
+      if (daysDiff !== 0) {
+        const actionLabel = getTaskActionLabel(task.type);
+        const productName = task.orderItem?.product?.name || 'Product';
+        const timingNote = daysDiff > 0
+          ? `${daysDiff} day${daysDiff > 1 ? 's' : ''} late`
+          : `${Math.abs(daysDiff)} day${Math.abs(daysDiff) > 1 ? 's' : ''} early`;
+
+        const newNote = `${productName}: ${actionLabel} ${timingNote}`;
+        const dateStr = new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+        const formattedNote = `[${dateStr}] ${newNote}`;
+
+        try {
+          // Fetch the order to get existing notes
+          const orderRes = await fetch(`/api/v1/farms/${currentFarmId}/orders/${task.orderItem.order.id}`);
+          if (orderRes.ok) {
+            const orderData = await orderRes.json();
+            const existingNotes = orderData.notes || '';
+            const updatedNotes = existingNotes
+              ? `${existingNotes}\n${formattedNote}`
+              : formattedNote;
+
+            // Update the order with appended note
+            await updateOrder.mutateAsync({
+              orderId: task.orderItem.order.id,
+              data: { notes: updatedNotes },
+            });
+          }
+        } catch (err) {
+          // Don't fail the whole operation if note update fails
+          console.error('Failed to add timing note to order:', err);
+        }
+      }
     }
-  }, [selectedTasks, completeTask, clearSelection]);
+
+    // Close the modal and refresh
+    setViewingLog(null);
+  }, [updateTask, updateOrder, viewingLog]);
 
   const renderTaskCard = (task: Task) => {
     const typeInfo = getTaskTypeInfo(task.type);
     const isCompleted = task.status === 'COMPLETED';
-    const isSelected = selectedTaskIds.has(task.id);
+    const taskIsOverdue = isOverdue(task);
+    // A task is fully complete only if status is COMPLETED and has log data
+    const isFullyComplete = isCompleted && task.completedBy;
 
     return (
       <div
         key={task.id}
-        onClick={() => !isCompleted && handleOpenLog(task)}
-        className={`border rounded-lg p-4 bg-card transition-all ${
-          isCompleted ? 'opacity-60' : 'hover:border-primary hover:shadow-md cursor-pointer'
-        } ${isSelected ? 'ring-2 ring-primary border-primary' : ''}`}
+        onClick={() => {
+          if (isFullyComplete) {
+            setViewingLog(task);
+          } else {
+            handleOpenLog(task);
+          }
+        }}
+        className={`border rounded-lg p-4 bg-card transition-all cursor-pointer ${
+          taskIsOverdue
+            ? 'border-red-400 bg-red-50 dark:bg-red-950/30 hover:border-red-500 hover:shadow-md'
+            : isFullyComplete
+            ? 'opacity-70 hover:opacity-100 hover:border-blue-300 hover:shadow-md'
+            : 'hover:border-primary hover:shadow-md'
+        }`}
+        data-tutorial="task-card"
       >
         <div className="flex items-start gap-4">
-          {/* Selection Checkbox */}
-          {!isCompleted && (
-            <div
-              onClick={(e) => toggleTaskSelection(task.id, e)}
-              className="flex items-center justify-center w-6 h-6 mt-1"
-            >
-              <input
-                type="checkbox"
-                checked={isSelected}
-                onChange={() => {}}
-                className="w-5 h-5 rounded border-gray-300 text-primary focus:ring-primary cursor-pointer"
-              />
-            </div>
-          )}
-
           {/* Task Type Icon */}
           <div className={`text-3xl p-2 rounded-lg ${typeInfo.bgColor}`}>
             {typeInfo.icon}
@@ -356,18 +525,23 @@ export default function OperationsPage() {
 
           {/* Task Details */}
           <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2 mb-1">
+            <div className="flex items-center gap-2 mb-1 flex-wrap">
               <span className={`px-2 py-0.5 text-xs font-medium rounded-full ${typeInfo.bgColor} ${typeInfo.color}`}>
                 {typeInfo.label}
               </span>
-              {isCompleted && (
+              {taskIsOverdue && (
+                <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200">
+                  ⚠️ OVERDUE
+                </span>
+              )}
+              {isFullyComplete && (
                 <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200">
                   Completed
                 </span>
               )}
             </div>
 
-            <h3 className={`font-semibold ${isCompleted ? 'line-through' : ''}`}>
+            <h3 className={`font-semibold ${isFullyComplete ? 'line-through' : ''}`}>
               {task.orderItem?.product?.name || task.title}
             </h3>
 
@@ -428,19 +602,39 @@ export default function OperationsPage() {
             {todayCompleted > 0 && ` (${todayCompleted} completed)`}
           </p>
         </div>
-        <label className="flex items-center gap-2 text-sm cursor-pointer">
-          <input
-            type="checkbox"
-            checked={showCompleted}
-            onChange={(e) => setShowCompleted(e.target.checked)}
-            className="rounded"
-          />
-          Show completed
-        </label>
+        <div className="flex items-center gap-4">
+          <label className="flex items-center gap-2 text-sm cursor-pointer">
+            <input
+              type="checkbox"
+              checked={showOverdue}
+              onChange={(e) => setShowOverdue(e.target.checked)}
+              className="rounded"
+            />
+            Show overdue
+          </label>
+          <label className="flex items-center gap-2 text-sm cursor-pointer">
+            <input
+              type="checkbox"
+              checked={showCompleted}
+              onChange={(e) => setShowCompleted(e.target.checked)}
+              className="rounded"
+            />
+            Show completed
+          </label>
+        </div>
       </div>
 
       {/* Stats */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+        {overdueCount > 0 && (
+          <button
+            onClick={() => setShowOverdueModal(true)}
+            className="border border-red-300 rounded-lg p-4 bg-red-50 dark:bg-red-950/30 text-left hover:bg-red-100 dark:hover:bg-red-950/50 transition-colors cursor-pointer"
+          >
+            <p className="text-sm text-red-700 dark:text-red-300">Overdue</p>
+            <p className="text-2xl font-bold text-red-600 dark:text-red-400">⚠️ {overdueCount}</p>
+          </button>
+        )}
         <div className="border rounded-lg p-4 bg-card">
           <p className="text-sm text-muted-foreground">Today Pending</p>
           <p className="text-2xl font-bold">{todayPending}</p>
@@ -455,17 +649,17 @@ export default function OperationsPage() {
         </div>
         <div className="border rounded-lg p-4 bg-card">
           <p className="text-sm text-muted-foreground">Total Pending</p>
-          <p className="text-2xl font-bold">{filteredTasks.filter(t => t.status !== 'COMPLETED').length}</p>
+          <p className="text-2xl font-bold">{filteredTasks.filter(t => !(t.status === 'COMPLETED' && t.completedBy)).length}</p>
         </div>
       </div>
 
       {/* View Tabs */}
       <div className="flex gap-2 border-b overflow-x-auto">
-        {(['calendar', 'seeding', 'transplant', 'harvest', 'all'] as ViewMode[]).map((mode) => (
+        {(['calendar', 'seeding', 'transplant', 'harvest', 'logs', 'all'] as ViewMode[]).map((mode) => (
           <button
             key={mode}
             onClick={() => setViewMode(mode)}
-            className={`px-4 py-2 -mb-px capitalize whitespace-nowrap ${
+            className={`px-4 py-2 -mb-px capitalize whitespace-nowrap flex items-center gap-1.5 ${
               viewMode === mode ? 'border-b-2 border-primary font-medium' : 'text-muted-foreground'
             }`}
           >
@@ -479,11 +673,15 @@ export default function OperationsPage() {
         <TaskCalendar
           tasks={tasks || []}
           onTaskClick={(task) => {
-            if (task.status !== 'COMPLETED') {
+            // Only block if task is FULLY complete (has log data)
+            const isFullyComplete = task.status === 'COMPLETED' && task.completedBy;
+            if (!isFullyComplete) {
               handleOpenLog(task);
             }
           }}
+          onViewLog={(task) => setViewingLog(task)}
           showCompleted={showCompleted}
+          showOverdue={showOverdue}
         />
       )}
 
@@ -492,11 +690,15 @@ export default function OperationsPage() {
         <SeedingView
           tasks={tasks || []}
           onTaskClick={(task) => {
-            if (task.status !== 'COMPLETED') {
+            // Only block if task is FULLY complete (has log data)
+            const isFullyComplete = task.status === 'COMPLETED' && task.completedBy;
+            if (!isFullyComplete) {
               handleOpenLog(task);
             }
           }}
+          onViewLog={(task) => setViewingLog(task)}
           showCompleted={showCompleted}
+          showOverdue={showOverdue}
         />
       )}
 
@@ -505,11 +707,15 @@ export default function OperationsPage() {
         <TransplantView
           tasks={tasks || []}
           onTaskClick={(task) => {
-            if (task.status !== 'COMPLETED') {
+            // Only block if task is FULLY complete (has log data)
+            const isFullyComplete = task.status === 'COMPLETED' && task.completedBy;
+            if (!isFullyComplete) {
               handleOpenLog(task);
             }
           }}
+          onViewLog={(task) => setViewingLog(task)}
           showCompleted={showCompleted}
+          showOverdue={showOverdue}
         />
       )}
 
@@ -518,12 +724,185 @@ export default function OperationsPage() {
         <HarvestView
           tasks={tasks || []}
           onTaskClick={(task) => {
-            if (task.status !== 'COMPLETED') {
+            // Only block if task is FULLY complete (has log data)
+            const isFullyComplete = task.status === 'COMPLETED' && task.completedBy;
+            if (!isFullyComplete) {
               handleOpenLog(task);
             }
           }}
+          onViewLog={(task) => setViewingLog(task)}
           showCompleted={showCompleted}
+          showOverdue={showOverdue}
         />
+      )}
+
+      {/* Logs View */}
+      {viewMode === 'logs' && (
+        isLoading ? (
+          <div className="text-center py-12 text-muted-foreground">Loading logs...</div>
+        ) : completedTasks.length === 0 && tasksMissingLog.length === 0 ? (
+          <div className="border rounded-lg p-12 text-center bg-card">
+            <div className="text-4xl mb-4">📋</div>
+            <h3 className="text-lg font-semibold">No logs yet</h3>
+            <p className="text-muted-foreground">
+              Completed tasks will appear here as logs.
+            </p>
+          </div>
+        ) : (
+          <div className="space-y-6">
+            {/* Tasks Missing Logs */}
+            {tasksMissingLog.length > 0 && (
+              <div>
+                <div className="flex items-center justify-between mb-3">
+                  <h2 className="text-lg font-semibold text-amber-600 dark:text-amber-400">📝 Tasks Missing Logs</h2>
+                  <span className="text-sm text-amber-600 dark:text-amber-400">
+                    {tasksMissingLog.length} need attention
+                  </span>
+                </div>
+                <p className="text-sm text-muted-foreground mb-4">
+                  These tasks were marked complete but don't have log data. Click to add log information.
+                </p>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {tasksMissingLog.map((task) => {
+                    const typeInfo = getTaskTypeInfo(task.type);
+                    return (
+                      <div
+                        key={task.id}
+                        onClick={() => handleOpenLog(task)}
+                        className="border-2 border-amber-400 rounded-lg p-4 bg-amber-50 dark:bg-amber-950/30 hover:border-amber-500 hover:shadow-md cursor-pointer transition-all"
+                      >
+                        <div className="flex items-start gap-4">
+                          <div className={`text-2xl p-2 rounded-lg ${typeInfo.bgColor}`}>
+                            {typeInfo.icon}
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 mb-1">
+                              <span className={`px-2 py-0.5 text-xs font-medium rounded-full ${typeInfo.bgColor} ${typeInfo.color}`}>
+                                {typeInfo.label}
+                              </span>
+                              <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200">
+                                Missing Log
+                              </span>
+                            </div>
+                            <h4 className="font-semibold">
+                              {task.orderItem?.product?.name || task.title}
+                            </h4>
+                            <div className="flex flex-wrap gap-x-4 gap-y-1 mt-1 text-sm text-muted-foreground">
+                              {task.orderItem?.order?.customer && (
+                                <span>Customer: <strong>{task.orderItem.order.customer}</strong></span>
+                              )}
+                              {task.dueDate && (
+                                <span>Due: <strong>{new Date(task.dueDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</strong></span>
+                              )}
+                            </div>
+                          </div>
+                          <div className="text-muted-foreground">
+                            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                            </svg>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* Completed Logs */}
+            {completedTasks.length > 0 && (
+              <>
+                {Object.keys(completedByDate)
+                  .sort((a, b) => new Date(b).getTime() - new Date(a).getTime())
+                  .map((dateKey) => {
+                    const tasksWithLogs = completedByDate[dateKey];
+                    if (tasksWithLogs.length === 0) return null;
+
+                    const formattedDate = dateKey === 'Unknown' ? 'Unknown' : (() => {
+                      const date = new Date(dateKey);
+                      const isToday = date.toDateString() === today.toDateString();
+                      const yesterday = new Date(today);
+                      yesterday.setDate(yesterday.getDate() - 1);
+                      const isYesterday = date.toDateString() === yesterday.toDateString();
+                      if (isToday) return 'Today';
+                      if (isYesterday) return 'Yesterday';
+                      return date.toLocaleDateString('en-US', {
+                        weekday: 'long',
+                        month: 'short',
+                        day: 'numeric',
+                      });
+                    })();
+
+                    return (
+                      <div key={dateKey}>
+                        <div className="flex items-center gap-3 mb-3">
+                          <h3 className="text-lg font-semibold">{formattedDate}</h3>
+                          <span className="text-sm text-muted-foreground">
+                            {tasksWithLogs.length} completed
+                          </span>
+                        </div>
+                        <div className="space-y-2">
+                          {tasksWithLogs.map((task) => {
+                            const typeInfo = getTaskTypeInfo(task.type);
+                            return (
+                              <div
+                                key={task.id}
+                                onClick={() => setViewingLog(task)}
+                                className="border rounded-lg p-4 bg-card hover:border-blue-300 hover:shadow-md cursor-pointer transition-all"
+                              >
+                                <div className="flex items-start gap-4">
+                                  <div className={`text-2xl p-2 rounded-lg ${typeInfo.bgColor}`}>
+                                    {typeInfo.icon}
+                                  </div>
+                                  <div className="flex-1 min-w-0">
+                                    <div className="flex items-center gap-2 mb-1">
+                                      <span className={`px-2 py-0.5 text-xs font-medium rounded-full ${typeInfo.bgColor} ${typeInfo.color}`}>
+                                        {typeInfo.label}
+                                      </span>
+                                      <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200">
+                                        ✓ Completed
+                                      </span>
+                                    </div>
+                                    <h4 className="font-semibold">
+                                      {task.orderItem?.product?.name || task.title}
+                                    </h4>
+                                    <div className="flex flex-wrap gap-x-4 gap-y-1 mt-1 text-sm text-muted-foreground">
+                                      {task.orderItem?.order?.customer && (
+                                        <span>Customer: <strong>{task.orderItem.order.customer}</strong></span>
+                                      )}
+                                      {task.completedBy && (
+                                        <span>By: <strong>{task.completedBy}</strong></span>
+                                      )}
+                                      {task.completedAt && (
+                                        <span>At: <strong>{new Date(task.completedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</strong></span>
+                                      )}
+                                      {task.actualTrays && (
+                                        <span>Trays: <strong>{task.actualTrays}</strong></span>
+                                      )}
+                                    </div>
+                                    {task.completionNotes && (
+                                      <p className="mt-2 text-sm text-muted-foreground italic truncate">
+                                        "{task.completionNotes}"
+                                      </p>
+                                    )}
+                                  </div>
+                                  <div className="text-muted-foreground">
+                                    <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                                    </svg>
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    );
+                  })}
+              </>
+            )}
+          </div>
+        )
       )}
 
       {/* Tasks List - All Tasks View */}
@@ -546,7 +925,7 @@ export default function OperationsPage() {
                 <div className="flex items-center gap-3 mb-3">
                   <h3 className="text-lg font-semibold">{formatDateHeader(dateKey)}</h3>
                   <span className="text-sm text-muted-foreground">
-                    {tasksByDate[dateKey].filter(t => t.status !== 'COMPLETED').length} pending
+                    {tasksByDate[dateKey].filter(t => !(t.status === 'COMPLETED' && t.completedBy)).length} pending
                   </span>
                 </div>
 
@@ -563,7 +942,7 @@ export default function OperationsPage() {
       {/* Task Completion Log Modal */}
       {loggingTask && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-background border rounded-lg shadow-lg w-full max-w-md mx-4 max-h-[90vh] overflow-y-auto">
+          <div ref={logModalRef} className="bg-background border rounded-lg shadow-lg w-full max-w-md mx-4 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between px-6 py-4 border-b sticky top-0 bg-background">
               <div>
                 <h2 className="text-lg font-semibold">Log Task Completion</h2>
@@ -630,7 +1009,7 @@ export default function OperationsPage() {
                     </span>
                   </div>
                 )}
-                {(loggingTask.type === 'MOVE_TO_LIGHT' || loggingTask.type === 'HARVESTING') && loggingTask.orderItem?.seedLot && (
+                {(loggingTask.type === 'SEED' || loggingTask.type === 'MOVE_TO_LIGHT' || loggingTask.type === 'HARVESTING') && loggingTask.orderItem?.seedLot && (
                   <div className="flex justify-between">
                     <span className="text-muted-foreground">Seed Lot:</span>
                     <span className="font-medium">{loggingTask.orderItem.seedLot}</span>
@@ -657,8 +1036,8 @@ export default function OperationsPage() {
                 />
               </div>
 
-              {/* Seed Lot - Only show for SEED tasks */}
-              {loggingTask.type === 'SEED' && (
+              {/* Seed Lot - Show for SOAK or SEED tasks if not already set */}
+              {(loggingTask.type === 'SOAK' || loggingTask.type === 'SEED') && !loggingTask.orderItem?.seedLot && (
                 <div>
                   <label className="block text-sm font-medium mb-1">Seed Lot</label>
                   <input
@@ -774,13 +1153,113 @@ export default function OperationsPage() {
         </div>
       )}
 
-      {/* Bulk Action Bar */}
-      <BulkActionBar
-        selectedTasks={selectedTasks}
-        onClearSelection={clearSelection}
-        onBulkComplete={handleBulkComplete}
-        isLoading={isBulkCompleting}
-      />
+      {/* Log Viewer Modal */}
+      {viewingLog && (
+        <LogViewerModal
+          task={viewingLog}
+          onClose={() => setViewingLog(null)}
+          onSaveEdit={handleSaveLogEdit}
+        />
+      )}
+
+      {/* Overdue Tasks Modal */}
+      {showOverdueModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-background border rounded-lg shadow-lg w-full max-w-2xl mx-4 max-h-[80vh] overflow-hidden flex flex-col">
+            <div className="flex items-center justify-between px-6 py-4 border-b sticky top-0 bg-background">
+              <div>
+                <h2 className="text-lg font-semibold text-red-600 dark:text-red-400">Overdue Tasks</h2>
+                <p className="text-sm text-muted-foreground">
+                  {overdueTasks.length} task{overdueTasks.length !== 1 ? 's' : ''} overdue
+                </p>
+              </div>
+              <button
+                onClick={() => setShowOverdueModal(false)}
+                className="text-muted-foreground hover:text-foreground"
+              >
+                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+            <div className="p-4 overflow-y-auto flex-1">
+              {overdueTasks.length === 0 ? (
+                <div className="text-center py-8">
+                  <p className="text-muted-foreground">No overdue tasks</p>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {overdueTasks.map((task) => {
+                    const typeInfo = getTaskTypeInfo(task.type);
+                    const dueDate = task.dueDate ? new Date(task.dueDate) : null;
+                    const daysOverdue = dueDate
+                      ? Math.floor((today.getTime() - dueDate.getTime()) / (1000 * 60 * 60 * 24))
+                      : 0;
+
+                    return (
+                      <button
+                        key={task.id}
+                        onClick={() => {
+                          setShowOverdueModal(false);
+                          handleOpenLog(task);
+                        }}
+                        className="w-full text-left border-2 border-red-300 rounded-lg p-4 bg-red-50 dark:bg-red-950/30 hover:border-red-400 hover:shadow-md transition-all"
+                      >
+                        <div className="flex items-start gap-4">
+                          <div className={`text-2xl p-2 rounded-lg ${typeInfo.bgColor}`}>
+                            {typeInfo.icon}
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 mb-1 flex-wrap">
+                              <span className={`px-2 py-0.5 text-xs font-medium rounded-full ${typeInfo.bgColor} ${typeInfo.color}`}>
+                                {typeInfo.label}
+                              </span>
+                              <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200">
+                                {daysOverdue} day{daysOverdue !== 1 ? 's' : ''} overdue
+                              </span>
+                            </div>
+                            <h4 className="font-semibold">
+                              {task.orderItem?.product?.name || task.title}
+                            </h4>
+                            <div className="flex flex-wrap gap-x-4 gap-y-1 mt-1 text-sm text-muted-foreground">
+                              {task.orderItem?.order?.customer && (
+                                <span>Customer: <strong>{task.orderItem.order.customer}</strong></span>
+                              )}
+                              {task.orderItem?.order?.orderNumber && (
+                                <span>Order: <strong>{task.orderItem.order.orderNumber}</strong></span>
+                              )}
+                              {task.orderItem?.traysNeeded && (
+                                <span>Trays: <strong>{task.orderItem.traysNeeded}</strong></span>
+                              )}
+                              {dueDate && (
+                                <span>Due: <strong>{dueDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</strong></span>
+                              )}
+                            </div>
+                          </div>
+                          <div className="text-muted-foreground">
+                            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                            </svg>
+                          </div>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+            <div className="border-t px-6 py-3 bg-muted/30">
+              <button
+                onClick={() => setShowOverdueModal(false)}
+                className="w-full px-4 py-2 border rounded-md hover:bg-muted transition-colors"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }

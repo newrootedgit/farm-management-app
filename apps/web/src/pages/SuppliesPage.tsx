@@ -1,5 +1,7 @@
 import { useState, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useFarmStore } from '@/stores/farm-store';
+import { useToast } from '@/components/ui/Toast';
 import {
   useSupplyCategories,
   useSeedDefaultSupplyCategories,
@@ -29,9 +31,22 @@ const formatCurrency = (cents: number) => {
 
 export default function SuppliesPage() {
   const { currentFarmId } = useFarmStore();
+  const { showToast } = useToast();
 
-  // Tab state
-  const [activeTab, setActiveTab] = useState<TabType>('stock');
+  // Tab state - support URL param ?tab=purchases for deep linking
+  const [searchParams] = useSearchParams();
+  const tabParam = searchParams.get('tab') as TabType | null;
+  const validTabs: TabType[] = ['stock', 'inventory', 'purchases', 'usage'];
+  const [activeTab, setActiveTab] = useState<TabType>(
+    tabParam && validTabs.includes(tabParam) ? tabParam : 'stock'
+  );
+
+  // Sync tab state when URL param changes (for same-page navigation)
+  useEffect(() => {
+    if (tabParam && validTabs.includes(tabParam)) {
+      setActiveTab(tabParam);
+    }
+  }, [tabParam]);
 
   // Data hooks
   const { data: categories, isLoading: categoriesLoading } = useSupplyCategories(currentFarmId);
@@ -198,8 +213,10 @@ export default function SuppliesPage() {
     try {
       if (editingSupply) {
         await updateSupply.mutateAsync({ id: editingSupply.id, data });
+        showToast('success', 'Supply updated successfully');
       } else {
         await createSupply.mutateAsync(data);
+        showToast('success', 'Supply added successfully');
       }
       setShowSupplyForm(false);
       resetSupplyForm();
@@ -212,8 +229,9 @@ export default function SuppliesPage() {
     if (!confirm('Are you sure you want to delete this supply?')) return;
     try {
       await deleteSupply.mutateAsync(id);
+      showToast('success', 'Supply deleted');
     } catch (err) {
-      alert(err instanceof Error ? err.message : 'Failed to delete supply');
+      showToast('error', err instanceof Error ? err.message : 'Failed to delete supply');
     }
   };
 
@@ -285,6 +303,7 @@ export default function SuppliesPage() {
       }
       setShowPurchaseForm(false);
       resetPurchaseForm();
+      showToast('success', 'Stock received successfully');
     } catch (err) {
       setPurchaseFormError(err instanceof Error ? err.message : 'Failed to record purchase');
     }
@@ -403,6 +422,7 @@ export default function SuppliesPage() {
         <button
           onClick={() => handleOpenSupplyForm()}
           className="px-4 py-2 bg-primary text-primary-foreground rounded-md hover:bg-primary/90"
+          data-tutorial="add-supply"
         >
           + Add Supply
         </button>
@@ -806,6 +826,7 @@ export default function SuppliesPage() {
                 <button
                   onClick={() => handleOpenPurchaseForm()}
                   className="px-4 py-2 bg-primary text-primary-foreground rounded-md hover:bg-primary/90"
+                  data-tutorial="receive-supply"
                 >
                   + Receive Stock
                 </button>

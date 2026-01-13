@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { XMarkIcon, PrinterIcon, ClipboardDocumentListIcon, ChevronDownIcon } from '@heroicons/react/24/outline';
 import type { OrderWithItems } from '@farm/shared';
 import { InvoiceDocument, PackListDocument } from '@/components/print';
+import { useEscapeKey } from '@/hooks/useEscapeKey';
 
 interface OrderViewModalProps {
   order: OrderWithItems;
@@ -12,6 +13,10 @@ interface OrderViewModalProps {
 export function OrderViewModal({ order, onClose, farmName }: OrderViewModalProps) {
   const [showPrintMenu, setShowPrintMenu] = useState(false);
   const [printType, setPrintType] = useState<'invoice' | 'packlist' | null>(null);
+
+  // Close on ESC key
+  useEscapeKey(true, onClose);
+
   const formatDate = (date: Date | string) => {
     return new Date(date).toLocaleDateString('en-US', {
       weekday: 'short',

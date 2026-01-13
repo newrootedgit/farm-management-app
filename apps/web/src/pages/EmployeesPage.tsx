@@ -468,6 +468,7 @@ export default function EmployeesPage() {
         <button
           onClick={handleAddEmployee}
           className="px-4 py-2 bg-primary text-primary-foreground rounded-md hover:bg-primary/90"
+          data-tutorial="add-employee"
         >
           Add Team Member
         </button>

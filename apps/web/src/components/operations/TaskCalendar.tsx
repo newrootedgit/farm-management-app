@@ -6,8 +6,27 @@ type CalendarView = 'day' | 'week' | 'month';
 interface TaskCalendarProps {
   tasks: Task[];
   onTaskClick: (task: Task) => void;
+  onViewLog?: (task: Task) => void;
   showCompleted: boolean;
+  showOverdue?: boolean;
 }
+
+// Helper function to check if a task is overdue
+// Tasks are overdue if past due AND either not completed or completed without log data
+const isOverdue = (task: Task): boolean => {
+  if (!task.dueDate) return false;
+  if (task.status === 'CANCELLED') return false;
+
+  const dueDate = new Date(task.dueDate);
+  dueDate.setHours(23, 59, 59, 999);
+  const isPastDue = dueDate < new Date();
+
+  if (!isPastDue) return false;
+  if (task.status !== 'COMPLETED') return true;
+  if (!task.completedBy) return true; // Completed but missing log data
+
+  return false;
+};
 
 // Task type colors
 const TASK_TYPE_COLORS: Record<string, { bg: string; text: string; dot: string; label: string }> = {
@@ -17,7 +36,7 @@ const TASK_TYPE_COLORS: Record<string, { bg: string; text: string; dot: string; 
   HARVESTING: { bg: 'bg-rose-100 dark:bg-rose-900/50', text: 'text-rose-700 dark:text-rose-300', dot: 'bg-rose-500', label: 'Harvest' },
 };
 
-export default function TaskCalendar({ tasks, onTaskClick, showCompleted }: TaskCalendarProps) {
+export default function TaskCalendar({ tasks, onTaskClick, onViewLog, showCompleted, showOverdue = true }: TaskCalendarProps) {
   const [calendarView, setCalendarView] = useState<CalendarView>('month');
   const [currentDate, setCurrentDate] = useState(() => {
     const now = new Date();
@@ -84,7 +103,10 @@ export default function TaskCalendar({ tasks, onTaskClick, showCompleted }: Task
 
     tasks.forEach((task) => {
       if (!productionTypes.includes(task.type)) return;
-      if (!showCompleted && task.status === 'COMPLETED') return;
+      // Only hide tasks that are FULLY completed (have log data)
+      const isFullyComplete = task.status === 'COMPLETED' && task.completedBy;
+      if (!showCompleted && isFullyComplete) return;
+      if (!showOverdue && isOverdue(task)) return;
       if (!task.dueDate) return;
 
       const date = new Date(task.dueDate);
@@ -106,7 +128,7 @@ export default function TaskCalendar({ tasks, onTaskClick, showCompleted }: Task
     });
 
     return grouped;
-  }, [tasks, showCompleted]);
+  }, [tasks, showCompleted, showOverdue]);
 
   const getTasksForDate = (date: Date | null): Task[] => {
     if (!date) return [];
@@ -263,26 +285,46 @@ export default function TaskCalendar({ tasks, onTaskClick, showCompleted }: Task
                 {dayTasks.map((task) => {
                   const taskColors = TASK_TYPE_COLORS[task.type] || { bg: 'bg-gray-100', text: 'text-gray-700', dot: 'bg-gray-500', label: task.type };
                   const isCompleted = task.status === 'COMPLETED';
+                  const taskIsOverdue = isOverdue(task);
                   const productName = task.orderItem?.product?.name || task.title;
                   const customerName = task.orderItem?.order?.customer || '';
+                  // Only truly complete if has log data
+                  const isFullyComplete = isCompleted && task.completedBy;
 
                   return (
                     <div
                       key={task.id}
-                      onClick={() => onTaskClick(task)}
-                      className={`border rounded-lg p-4 bg-card transition-all ${
-                        isCompleted ? 'opacity-60' : 'hover:border-primary hover:shadow-md cursor-pointer'
+                      onClick={() => {
+                        if (isFullyComplete && onViewLog) {
+                          onViewLog(task);
+                        } else {
+                          onTaskClick(task);
+                        }
+                      }}
+                      className={`border rounded-lg p-4 bg-card transition-all cursor-pointer ${
+                        taskIsOverdue
+                          ? 'border-red-400 bg-red-50 dark:bg-red-950/30 hover:border-red-500 hover:shadow-md'
+                          : isFullyComplete
+                          ? 'opacity-70 hover:opacity-100 hover:border-blue-300 hover:shadow-md'
+                          : 'hover:border-primary hover:shadow-md'
                       }`}
                     >
                       <div className="flex items-start justify-between mb-2">
-                        <span className={`px-2 py-1 rounded text-xs font-medium ${taskColors.bg} ${taskColors.text}`}>
-                          {isCompleted ? 'Completed' : taskColors.label}
-                        </span>
+                        <div className="flex items-center gap-2">
+                          <span className={`px-2 py-1 rounded text-xs font-medium ${taskColors.bg} ${taskColors.text}`}>
+                            {isFullyComplete ? 'Completed' : taskColors.label}
+                          </span>
+                          {taskIsOverdue && (
+                            <span className="px-2 py-1 rounded text-xs font-medium bg-red-100 dark:bg-red-900/50 text-red-700 dark:text-red-300">
+                              ⚠️ OVERDUE
+                            </span>
+                          )}
+                        </div>
                         <span className="text-xs text-muted-foreground">
                           {task.orderItem?.order?.orderNumber}
                         </span>
                       </div>
-                      <h3 className={`font-semibold text-lg mb-1 ${isCompleted ? 'line-through' : ''}`}>
+                      <h3 className={`font-semibold text-lg mb-1 ${isFullyComplete ? 'line-through' : ''}`}>
                         {productName}
                       </h3>
                       {customerName && <p className="text-sm text-muted-foreground mb-2">{customerName}</p>}
@@ -319,18 +361,32 @@ export default function TaskCalendar({ tasks, onTaskClick, showCompleted }: Task
                     {dayTasks.map((task) => {
                       const taskColors = TASK_TYPE_COLORS[task.type] || { bg: 'bg-gray-100', text: 'text-gray-700', label: task.type };
                       const isCompleted = task.status === 'COMPLETED';
+                      const taskIsOverdue = isOverdue(task);
+                      const isFullyComplete = isCompleted && task.completedBy;
                       const productName = task.orderItem?.product?.name || task.title;
 
                       return (
                         <button
                           key={task.id}
-                          onClick={() => onTaskClick(task)}
-                          className={`w-full text-left px-2 py-1.5 rounded text-xs ${taskColors.bg} ${taskColors.text} ${
-                            isCompleted ? 'opacity-60 line-through' : 'hover:opacity-80'
+                          onClick={() => {
+                            if (isFullyComplete && onViewLog) {
+                              onViewLog(task);
+                            } else {
+                              onTaskClick(task);
+                            }
+                          }}
+                          className={`w-full text-left px-2 py-1.5 rounded text-xs ${
+                            taskIsOverdue
+                              ? 'bg-red-100 dark:bg-red-900/50 text-red-700 dark:text-red-300 ring-2 ring-red-400'
+                              : `${taskColors.bg} ${taskColors.text}`
+                          } ${
+                            isFullyComplete ? 'opacity-60 line-through' : 'hover:opacity-80'
                           }`}
-                          title={`${productName}\nTask: ${taskColors.label}`}
+                          title={`${productName}\nTask: ${taskColors.label}${taskIsOverdue ? '\n⚠️ OVERDUE' : ''}`}
                         >
-                          <div className="font-medium truncate">{productName}</div>
+                          <div className="font-medium truncate">
+                            {taskIsOverdue ? '⚠️ ' : ''}{productName}
+                          </div>
                           <div className="text-[10px] opacity-80">{taskColors.label}</div>
                         </button>
                       );
@@ -358,15 +414,21 @@ export default function TaskCalendar({ tasks, onTaskClick, showCompleted }: Task
               <div key={weekIndex} className="grid grid-cols-7 divide-x min-h-[120px]">
                 {week.map((date, dayIndex) => {
                   const dayTasks = getTasksForDate(date);
-                  const pendingCount = dayTasks.filter((t) => t.status !== 'COMPLETED').length;
-                  const completedCount = dayTasks.filter((t) => t.status === 'COMPLETED').length;
+                  const overdueCount = dayTasks.filter((t) => isOverdue(t)).length;
+                  const fullyCompletedCount = dayTasks.filter((t) => t.status === 'COMPLETED' && t.completedBy).length;
+                  const pendingCount = dayTasks.filter((t) => {
+                    const isFullyComplete = t.status === 'COMPLETED' && t.completedBy;
+                    return !isFullyComplete && !isOverdue(t);
+                  }).length;
 
                   return (
                     <div
                       key={dayIndex}
                       className={`p-1 min-h-[120px] ${
                         date ? 'bg-card hover:bg-muted/30' : 'bg-muted/10'
-                      } ${isToday(date) ? 'bg-primary/5' : ''}`}
+                      } ${isToday(date) ? 'bg-primary/5' : ''} ${
+                        overdueCount > 0 ? 'bg-red-50/50 dark:bg-red-950/20' : ''
+                      }`}
                     >
                       {date && (
                         <>
@@ -380,16 +442,21 @@ export default function TaskCalendar({ tasks, onTaskClick, showCompleted }: Task
                             >
                               {date.getDate()}
                             </span>
-                            {(pendingCount > 0 || completedCount > 0) && (
+                            {(pendingCount > 0 || fullyCompletedCount > 0 || overdueCount > 0) && (
                               <div className="flex items-center gap-1 text-xs">
+                                {overdueCount > 0 && (
+                                  <span className="px-1.5 py-0.5 bg-red-100 dark:bg-red-900/50 text-red-700 dark:text-red-300 rounded" title={`${overdueCount} overdue`}>
+                                    ⚠️{overdueCount}
+                                  </span>
+                                )}
                                 {pendingCount > 0 && (
                                   <span className="px-1.5 py-0.5 bg-orange-100 dark:bg-orange-900/50 text-orange-700 dark:text-orange-300 rounded">
                                     {pendingCount}
                                   </span>
                                 )}
-                                {completedCount > 0 && (
+                                {fullyCompletedCount > 0 && (
                                   <span className="px-1.5 py-0.5 bg-green-100 dark:bg-green-900/50 text-green-700 dark:text-green-300 rounded">
-                                    {completedCount}
+                                    {fullyCompletedCount}
                                   </span>
                                 )}
                               </div>
@@ -399,6 +466,8 @@ export default function TaskCalendar({ tasks, onTaskClick, showCompleted }: Task
                             {dayTasks.slice(0, 4).map((task) => {
                               const taskColors = TASK_TYPE_COLORS[task.type] || { bg: 'bg-gray-100', text: 'text-gray-700', label: task.type };
                               const isCompleted = task.status === 'COMPLETED';
+                              const taskIsOverdue = isOverdue(task);
+                              const isFullyComplete = isCompleted && task.completedBy;
                               const productName = task.orderItem?.product?.name || task.title;
 
                               return (
@@ -406,14 +475,24 @@ export default function TaskCalendar({ tasks, onTaskClick, showCompleted }: Task
                                   key={task.id}
                                   onClick={(e) => {
                                     e.stopPropagation();
-                                    onTaskClick(task);
+                                    if (isFullyComplete && onViewLog) {
+                                      onViewLog(task);
+                                    } else {
+                                      onTaskClick(task);
+                                    }
                                   }}
-                                  className={`w-full text-left px-1.5 py-0.5 rounded text-xs truncate ${taskColors.bg} ${taskColors.text} ${
-                                    isCompleted ? 'opacity-60 line-through' : 'hover:opacity-80'
+                                  className={`w-full text-left px-1.5 py-0.5 rounded text-xs truncate ${
+                                    taskIsOverdue
+                                      ? 'bg-red-100 dark:bg-red-900/50 text-red-700 dark:text-red-300 ring-1 ring-red-400'
+                                      : `${taskColors.bg} ${taskColors.text}`
+                                  } ${
+                                    isFullyComplete ? 'opacity-60 line-through' : 'hover:opacity-80'
                                   }`}
-                                  title={`${productName}\nTask: ${taskColors.label}`}
+                                  title={`${productName}\nTask: ${taskColors.label}${taskIsOverdue ? '\n⚠️ OVERDUE' : ''}`}
                                 >
-                                  <span className="font-medium truncate">{productName}</span>
+                                  <span className="font-medium truncate">
+                                    {taskIsOverdue ? '⚠️' : ''}{productName}
+                                  </span>
                                   <span className="text-[10px] opacity-70 ml-1">· {taskColors.label}</span>
                                 </button>
                               );

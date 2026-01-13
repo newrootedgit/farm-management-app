@@ -1,5 +1,4 @@
 import { useMemo } from 'react';
-import { Link } from 'react-router-dom';
 import { Scissors, Calendar } from 'lucide-react';
 import { useTasks } from '@/lib/api-client';
 import { useFarmStore } from '@/stores/farm-store';
@@ -11,6 +10,7 @@ interface HarvestTask {
   customerName: string;
   orderNumber: string | null;
   quantityOz: number;
+  traysNeeded: number;
 }
 
 interface DayGroup {
@@ -18,22 +18,36 @@ interface DayGroup {
   label: string;
   tasks: HarvestTask[];
   totalOz: number;
+  totalTrays: number;
 }
 
 function useHarvestForecast(farmId: string | undefined, days: number = 7): {
   groups: DayGroup[];
   isLoading: boolean;
+  startDate: Date;
+  endDate: Date;
+  totalOz: number;
+  totalTrays: number;
 } {
   const { data: tasks, isLoading } = useTasks(farmId);
+
+  const today = useMemo(() => {
+    const d = new Date();
+    d.setHours(0, 0, 0, 0);
+    return d;
+  }, []);
+
+  const endDate = useMemo(() => {
+    const d = new Date(today);
+    d.setDate(today.getDate() + days - 1); // -1 because we want 7 days inclusive
+    return d;
+  }, [today, days]);
 
   const groups = useMemo(() => {
     if (!tasks) return [];
 
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-
-    const endDate = new Date(today);
-    endDate.setDate(today.getDate() + days);
+    const rangeEnd = new Date(today);
+    rangeEnd.setDate(today.getDate() + days);
 
     // Filter harvest tasks in the date range
     const harvestTasks = tasks
@@ -43,7 +57,7 @@ function useHarvestForecast(farmId: string | undefined, days: number = 7): {
         if (!t.dueDate) return false;
         const dueDate = new Date(t.dueDate);
         dueDate.setHours(0, 0, 0, 0);
-        return dueDate >= today && dueDate < endDate;
+        return dueDate >= today && dueDate < rangeEnd;
       })
       .map((t) => ({
         id: t.id,
@@ -52,6 +66,7 @@ function useHarvestForecast(farmId: string | undefined, days: number = 7): {
         customerName: t.orderItem?.order?.customer ?? 'Unknown',
         orderNumber: t.orderItem?.order?.orderNumber ?? null,
         quantityOz: t.orderItem?.quantityOz ?? 0,
+        traysNeeded: t.orderItem?.traysNeeded ?? 0,
       }))
       .sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime());
 
@@ -69,7 +84,7 @@ function useHarvestForecast(farmId: string | undefined, days: number = 7): {
     // Convert to array with labels
     const result: DayGroup[] = [];
 
-    groupMap.forEach((tasks, dateKey) => {
+    groupMap.forEach((groupTasks, dateKey) => {
       const date = new Date(dateKey);
       const isToday = date.toDateString() === today.toDateString();
       const isTomorrow = date.toDateString() === new Date(today.getTime() + 86400000).toDateString();
@@ -86,20 +101,27 @@ function useHarvestForecast(farmId: string | undefined, days: number = 7): {
       result.push({
         date,
         label,
-        tasks,
-        totalOz: tasks.reduce((sum, t) => sum + t.quantityOz, 0),
+        tasks: groupTasks,
+        totalOz: groupTasks.reduce((sum, t) => sum + t.quantityOz, 0),
+        totalTrays: groupTasks.reduce((sum, t) => sum + t.traysNeeded, 0),
       });
     });
 
     return result;
-  }, [tasks, days]);
+  }, [tasks, days, today]);
 
-  return { groups, isLoading };
+  const totalOz = useMemo(() => groups.reduce((sum, g) => sum + g.totalOz, 0), [groups]);
+  const totalTrays = useMemo(() => groups.reduce((sum, g) => sum + g.totalTrays, 0), [groups]);
+
+  return { groups, isLoading, startDate: today, endDate, totalOz, totalTrays };
 }
 
 export function HarvestForecastTable() {
   const { currentFarmId } = useFarmStore();
-  const { groups, isLoading } = useHarvestForecast(currentFarmId ?? undefined);
+  const { groups, isLoading, startDate, endDate, totalOz, totalTrays } = useHarvestForecast(currentFarmId ?? undefined);
+
+  // Format the date range for the header
+  const dateRangeStr = `${startDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} - ${endDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`;
 
   if (isLoading) {
     return (
@@ -123,14 +145,19 @@ export function HarvestForecastTable() {
 
   return (
     <div className="border rounded-lg bg-card overflow-hidden">
-      <div className="px-4 py-3 border-b bg-muted/30 flex items-center justify-between">
-        <h2 className="font-semibold flex items-center gap-2">
-          <Scissors className="w-4 h-4" />
-          Harvest Forecast (7 Days)
-        </h2>
-        <Link to="/operations?type=HARVESTING" className="text-xs text-primary hover:underline">
-          View all →
-        </Link>
+      <div className="px-4 py-3 border-b bg-muted/30">
+        <div className="flex items-center justify-between">
+          <h2 className="font-semibold flex items-center gap-2">
+            <Scissors className="w-4 h-4" />
+            Harvest Forecast
+          </h2>
+          <span className="text-sm text-muted-foreground">{dateRangeStr}</span>
+        </div>
+        {!isEmpty && (
+          <div className="mt-1 text-sm text-muted-foreground">
+            Total: <span className="font-medium text-foreground">{totalTrays} trays</span> · <span className="font-medium text-foreground">{totalOz} oz</span>
+          </div>
+        )}
       </div>
 
       {isEmpty ? (
@@ -153,17 +180,16 @@ export function HarvestForecastTable() {
                   )}
                 </h3>
                 <span className="text-sm text-muted-foreground">
-                  {group.totalOz} oz total
+                  {group.totalTrays} trays · {group.totalOz} oz
                 </span>
               </div>
 
               {/* Tasks for this day */}
               <div className="space-y-1">
                 {group.tasks.map((task) => (
-                  <Link
+                  <div
                     key={task.id}
-                    to="/operations"
-                    className="flex items-center justify-between py-2 px-3 -mx-3 rounded hover:bg-muted/50 transition-colors text-sm"
+                    className="flex items-center justify-between py-2 px-3 -mx-3 rounded text-sm"
                   >
                     <div className="flex-1 min-w-0">
                       <span className="font-medium">{task.productName}</span>
@@ -175,8 +201,10 @@ export function HarvestForecastTable() {
                         </span>
                       )}
                     </div>
-                    <span className="font-medium ml-4">{task.quantityOz} oz</span>
-                  </Link>
+                    <span className="text-muted-foreground ml-4">
+                      {task.traysNeeded} trays · <span className="font-medium text-foreground">{task.quantityOz} oz</span>
+                    </span>
+                  </div>
                 ))}
               </div>
             </div>

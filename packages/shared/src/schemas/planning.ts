@@ -155,6 +155,7 @@ export const UpdateTaskSchema = z.object({
   completionNotes: z.string().nullable().optional(),
   actualTrays: z.number().int().nullable().optional(),
   seedLot: z.string().nullable().optional(),
+  completedAt: z.coerce.date().nullable().optional(), // Allow updating completion date/time
 });
 
 // Schema for completing a task with log data

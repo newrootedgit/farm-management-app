@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { XMarkIcon } from '@heroicons/react/24/outline';
 import { SignatureCapture } from './SignatureCapture';
+import { useEscapeKey } from '@/hooks/useEscapeKey';
 
 interface SignatureModalProps {
   isOpen: boolean;
@@ -22,6 +23,9 @@ export function SignatureModal({
   const [signedBy, setSignedBy] = useState('');
   const [signatureData, setSignatureData] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  // Close on ESC key
+  useEscapeKey(isOpen, onClose);
 
   if (!isOpen) return null;
 

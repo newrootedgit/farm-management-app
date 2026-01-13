@@ -1,6 +1,8 @@
-import { useState } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { Link } from 'react-router-dom';
+import { GraduationCap, ChevronDown, RotateCcw, Eye } from 'lucide-react';
 import { useFarmStore } from '@/stores/farm-store';
+import { useTutorialStore } from '@/stores/tutorial-store';
 import { useFarm, useFarms, useCreateFarm } from '@/lib/api-client';
 import { PriorityPanel } from '@/components/dashboard/PriorityPanel';
 import { CapacityOverview } from '@/components/dashboard/CapacityOverview';
@@ -9,6 +11,23 @@ import { HarvestForecastTable } from '@/components/dashboard/HarvestForecastTabl
 
 export default function Dashboard() {
   const { currentFarmId, setCurrentFarm } = useFarmStore();
+  const { isActive: tutorialActive, showChecklist, startTutorial, toggleChecklist, resetTutorial, getProgress } = useTutorialStore();
+  const [showTutorialMenu, setShowTutorialMenu] = useState(false);
+  const tutorialMenuRef = useRef<HTMLDivElement>(null);
+  const tutorialProgress = getProgress();
+
+  // Close tutorial menu when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (tutorialMenuRef.current && !tutorialMenuRef.current.contains(e.target as Node)) {
+        setShowTutorialMenu(false);
+      }
+    };
+    if (showTutorialMenu) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [showTutorialMenu]);
   const { data: farms } = useFarms();
   const { data: farm } = useFarm(currentFarmId ?? undefined);
 
@@ -157,9 +176,54 @@ export default function Dashboard() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div>
-        <h1 className="text-2xl font-bold">{farm?.name || 'Dashboard'}</h1>
-        <p className="text-muted-foreground">Overview and quick actions</p>
+      <div className="flex items-start justify-between">
+        <div>
+          <h1 className="text-2xl font-bold">{farm?.name || 'Dashboard'}</h1>
+          <p className="text-muted-foreground">Overview and quick actions</p>
+        </div>
+        {!showChecklist && (
+          <div className="relative" ref={tutorialMenuRef}>
+            <button
+              onClick={() => setShowTutorialMenu(!showTutorialMenu)}
+              className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium border rounded-lg hover:bg-accent transition-colors"
+            >
+              <GraduationCap className="w-4 h-4" />
+              Tutorial
+              {tutorialProgress.completed > 0 && tutorialProgress.completed < tutorialProgress.total && (
+                <span className="text-xs text-muted-foreground">
+                  ({tutorialProgress.completed}/{tutorialProgress.total})
+                </span>
+              )}
+              <ChevronDown className="w-3 h-3 ml-1" />
+            </button>
+            {showTutorialMenu && (
+              <div className="absolute right-0 mt-1 w-48 bg-popover border rounded-lg shadow-lg z-50 py-1">
+                <button
+                  onClick={() => {
+                    tutorialActive ? toggleChecklist() : startTutorial();
+                    setShowTutorialMenu(false);
+                  }}
+                  className="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent text-left"
+                >
+                  <Eye className="w-4 h-4" />
+                  {tutorialActive ? 'Show Progress' : 'Start Tutorial'}
+                </button>
+                {(tutorialActive || tutorialProgress.completed > 0) && (
+                  <button
+                    onClick={() => {
+                      resetTutorial();
+                      setShowTutorialMenu(false);
+                    }}
+                    className="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent text-left text-orange-600"
+                  >
+                    <RotateCcw className="w-4 h-4" />
+                    Restart Tutorial
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Main Grid - Priority Panel + Capacity */}

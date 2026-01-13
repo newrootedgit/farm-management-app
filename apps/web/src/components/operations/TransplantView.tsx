@@ -1,6 +1,23 @@
 import { useMemo } from 'react';
 import type { Task } from '@farm/shared';
 
+// Helper function to check if a task is overdue
+// Tasks are overdue if past due AND either not completed or completed without log data
+const isOverdue = (task: Task): boolean => {
+  if (!task.dueDate) return false;
+  if (task.status === 'CANCELLED') return false;
+
+  const dueDate = new Date(task.dueDate);
+  dueDate.setHours(23, 59, 59, 999);
+  const isPastDue = dueDate < new Date();
+
+  if (!isPastDue) return false;
+  if (task.status !== 'COMPLETED') return true;
+  if (!task.completedBy) return true; // Completed but missing log data
+
+  return false;
+};
+
 // Earth tone styles (differentiated from competitor)
 const TRANSPLANT_STYLE = {
   bg: 'bg-amber-100',
@@ -12,10 +29,12 @@ const TRANSPLANT_STYLE = {
 interface TransplantViewProps {
   tasks: Task[];
   onTaskClick: (task: Task) => void;
+  onViewLog?: (task: Task) => void;
   showCompleted: boolean;
+  showOverdue?: boolean;
 }
 
-export default function TransplantView({ tasks, onTaskClick, showCompleted }: TransplantViewProps) {
+export default function TransplantView({ tasks, onTaskClick, onViewLog, showCompleted, showOverdue = true }: TransplantViewProps) {
   const today = useMemo(() => {
     const d = new Date();
     d.setHours(0, 0, 0, 0);
@@ -38,10 +57,13 @@ export default function TransplantView({ tasks, onTaskClick, showCompleted }: Tr
   const transplantTasks = useMemo(() => {
     return tasks.filter((t) => {
       if (t.type !== 'MOVE_TO_LIGHT') return false;
-      if (!showCompleted && t.status === 'COMPLETED') return false;
+      // Only hide tasks that are FULLY completed (have log data)
+      const isFullyComplete = t.status === 'COMPLETED' && t.completedBy;
+      if (!showCompleted && isFullyComplete) return false;
+      if (!showOverdue && isOverdue(t)) return false;
       return true;
     });
-  }, [tasks, showCompleted]);
+  }, [tasks, showCompleted, showOverdue]);
 
   // Today's transplant tasks
   const todayTransplant = useMemo(() => {
@@ -53,9 +75,11 @@ export default function TransplantView({ tasks, onTaskClick, showCompleted }: Tr
         return dueDate >= today && dueDate < todayEnd;
       })
       .sort((a, b) => {
-        // Pending first, then by customer name
-        if (a.status === 'COMPLETED' && b.status !== 'COMPLETED') return 1;
-        if (a.status !== 'COMPLETED' && b.status === 'COMPLETED') return -1;
+        // Fully completed tasks last, then by customer name
+        const aFullyComplete = a.status === 'COMPLETED' && a.completedBy;
+        const bFullyComplete = b.status === 'COMPLETED' && b.completedBy;
+        if (aFullyComplete && !bFullyComplete) return 1;
+        if (!aFullyComplete && bFullyComplete) return -1;
         const customerA = a.orderItem?.order?.customer || '';
         const customerB = b.orderItem?.order?.customer || '';
         return customerA.localeCompare(customerB);
@@ -67,7 +91,9 @@ export default function TransplantView({ tasks, onTaskClick, showCompleted }: Tr
     return transplantTasks
       .filter((t) => {
         if (!t.dueDate) return false;
-        if (t.status === 'COMPLETED') return false;
+        // Only exclude tasks that are fully completed (have log data)
+        const isFullyComplete = t.status === 'COMPLETED' && t.completedBy;
+        if (isFullyComplete) return false;
         const dueDate = new Date(t.dueDate);
         dueDate.setHours(0, 0, 0, 0);
         return dueDate >= todayEnd && dueDate < sevenDaysOut;
@@ -83,8 +109,17 @@ export default function TransplantView({ tasks, onTaskClick, showCompleted }: Tr
     return date.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
   };
 
-  const pendingCount = todayTransplant.filter((t) => t.status !== 'COMPLETED').length;
-  const completedCount = todayTransplant.filter((t) => t.status === 'COMPLETED').length;
+  // Count tasks that are not fully complete (need logs filled out)
+  const pendingCount = todayTransplant.filter((t) => !(t.status === 'COMPLETED' && t.completedBy)).length;
+  // Count tasks that are fully complete (have logs)
+  const completedCount = todayTransplant.filter((t) => t.status === 'COMPLETED' && t.completedBy).length;
+
+  // Overdue transplant tasks
+  const overdueTransplant = useMemo(() => {
+    return transplantTasks
+      .filter((t) => isOverdue(t))
+      .sort((a, b) => new Date(a.dueDate!).getTime() - new Date(b.dueDate!).getTime());
+  }, [transplantTasks]);
 
   // Calculate total trays for today
   const todayTotalTrays = todayTransplant
@@ -107,6 +142,64 @@ export default function TransplantView({ tasks, onTaskClick, showCompleted }: Tr
         </div>
       </div>
 
+      {/* Overdue Transplants */}
+      {overdueTransplant.length > 0 && (
+        <div>
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-lg font-semibold text-red-600 dark:text-red-400">⚠️ Overdue Transplants</h2>
+            <span className="text-sm text-red-600 dark:text-red-400">
+              {overdueTransplant.length} overdue
+            </span>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {overdueTransplant.map((task) => {
+              const customerName = task.orderItem?.order?.customer || 'Walk-in';
+              const daysOverdue = Math.floor((new Date().getTime() - new Date(task.dueDate!).getTime()) / (1000 * 60 * 60 * 24));
+
+              return (
+                <div
+                  key={task.id}
+                  onClick={() => onTaskClick(task)}
+                  className="border-2 border-red-400 rounded-lg p-4 bg-red-50 dark:bg-red-950/30 hover:border-red-500 hover:shadow-md cursor-pointer transition-all"
+                >
+                  <div className="flex items-start justify-between mb-3">
+                    <span className="px-2 py-1 rounded text-xs font-medium bg-red-100 dark:bg-red-900/50 text-red-700 dark:text-red-300">
+                      ⚠️ OVERDUE ({daysOverdue}d)
+                    </span>
+                    <span className="text-xs text-muted-foreground">
+                      {task.orderItem?.order?.orderNumber}
+                    </span>
+                  </div>
+
+                  <h3 className="font-semibold text-lg mb-2">
+                    {task.orderItem?.product?.name || 'Unknown Product'}
+                  </h3>
+
+                  <p className="text-sm text-muted-foreground mb-3">{customerName}</p>
+
+                  <div className="space-y-2 text-sm">
+                    <div className="text-xs text-red-600 dark:text-red-400">
+                      Due: {new Date(task.dueDate!).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}
+                    </div>
+                    <div className="flex gap-4">
+                      <span>
+                        <span className="text-muted-foreground">Trays:</span>{' '}
+                        <strong>{task.orderItem?.traysNeeded || '—'}</strong>
+                      </span>
+                      <span>
+                        <span className="text-muted-foreground">Qty:</span>{' '}
+                        <strong>{task.orderItem?.quantityOz || '—'} oz</strong>
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       {/* Today's Transplant */}
       <div>
         <div className="flex items-center justify-between mb-3">
@@ -128,28 +221,40 @@ export default function TransplantView({ tasks, onTaskClick, showCompleted }: Tr
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {todayTransplant.map((task) => {
               const isCompleted = task.status === 'COMPLETED';
+              const isFullyComplete = isCompleted && task.completedBy;
+              const taskIsOverdue = isOverdue(task);
               const customerName = task.orderItem?.order?.customer || 'Walk-in';
 
               return (
                 <div
                   key={task.id}
-                  onClick={() => !isCompleted && onTaskClick(task)}
-                  className={`border rounded-lg p-4 bg-card transition-all ${
-                    isCompleted
-                      ? 'opacity-60 border-green-200 bg-green-50'
-                      : `${TRANSPLANT_STYLE.border} ${TRANSPLANT_STYLE.hoverBorder} hover:shadow-md cursor-pointer`
+                  onClick={() => {
+                    if (isFullyComplete && onViewLog) {
+                      onViewLog(task);
+                    } else {
+                      onTaskClick(task);
+                    }
+                  }}
+                  className={`border rounded-lg p-4 bg-card transition-all cursor-pointer ${
+                    taskIsOverdue
+                      ? 'border-red-400 bg-red-50 dark:bg-red-950/30 hover:border-red-500 hover:shadow-md'
+                      : isFullyComplete
+                      ? 'opacity-70 hover:opacity-100 border-green-200 bg-green-50 hover:border-blue-300 hover:shadow-md'
+                      : `${TRANSPLANT_STYLE.border} ${TRANSPLANT_STYLE.hoverBorder} hover:shadow-md`
                   }`}
                 >
                   {/* Header */}
                   <div className="flex items-start justify-between mb-3">
                     <span
                       className={`px-2 py-1 rounded text-xs font-medium ${
-                        isCompleted
+                        taskIsOverdue
+                          ? 'bg-red-100 dark:bg-red-900/50 text-red-700 dark:text-red-300'
+                          : isFullyComplete
                           ? 'bg-green-100 text-green-800'
                           : `${TRANSPLANT_STYLE.bg} ${TRANSPLANT_STYLE.text}`
                       }`}
                     >
-                      {isCompleted ? 'Completed' : 'Move to Light'}
+                      {taskIsOverdue ? '⚠️ OVERDUE' : isFullyComplete ? 'Completed' : 'Move to Light'}
                     </span>
                     <span className="text-xs text-muted-foreground">
                       {task.orderItem?.order?.orderNumber}
@@ -157,7 +262,7 @@ export default function TransplantView({ tasks, onTaskClick, showCompleted }: Tr
                   </div>
 
                   {/* Product Name */}
-                  <h3 className={`font-semibold text-lg mb-2 ${isCompleted ? 'line-through' : ''}`}>
+                  <h3 className={`font-semibold text-lg mb-2 ${isFullyComplete ? 'line-through' : ''}`}>
                     {task.orderItem?.product?.name || 'Unknown Product'}
                   </h3>
 
