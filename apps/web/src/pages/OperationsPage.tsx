@@ -7,8 +7,10 @@ import SeedingView from '@/components/operations/SeedingView';
 import TransplantView from '@/components/operations/TransplantView';
 import HarvestView from '@/components/operations/HarvestView';
 import { RackSelector, type RackAllocation } from '@/components/operations/RackSelector';
+import { SeedLotSelector, type SeedLotSelection } from '@/components/operations/SeedLotSelector';
 import { LogViewerModal, type LogEditData } from '@/components/operations/LogViewerModal';
 import { useToast } from '@/components/ui/Toast';
+import { useEscapeKey } from '@/hooks/useEscapeKey';
 import type { Task } from '@farm/shared';
 
 type ViewMode = 'all' | 'calendar' | 'seeding' | 'transplant' | 'harvest' | 'logs';
@@ -54,6 +56,7 @@ interface TaskLogFormData {
   actualTrays: string;
   actualYieldOz: string;
   seedLot: string;
+  seedLotSelection: SeedLotSelection | null;
   completedDate: string;
   completedTime: string;
   completionNotes: string;
@@ -68,6 +71,7 @@ const getDefaultFormData = (): TaskLogFormData => {
     actualTrays: '',
     actualYieldOz: '',
     seedLot: '',
+    seedLotSelection: null,
     completedDate: now.toISOString().split('T')[0],
     completedTime: now.toTimeString().slice(0, 5),
     completionNotes: '',
@@ -107,6 +111,15 @@ export default function OperationsPage() {
   const [showOverdue, setShowOverdue] = useState(true);
   const [viewingLog, setViewingLog] = useState<Task | null>(null);
   const [showOverdueModal, setShowOverdueModal] = useState(false);
+
+  // Escape key to close modals
+  useEscapeKey(!!loggingTask, () => {
+    setLoggingTask(null);
+    setLogForm(getDefaultFormData());
+    setLogError(null);
+  });
+  useEscapeKey(!!viewingLog, () => setViewingLog(null));
+  useEscapeKey(showOverdueModal, () => setShowOverdueModal(false));
 
   if (!currentFarmId) {
     return (
@@ -245,6 +258,34 @@ export default function OperationsPage() {
     }
 
     try {
+      // Build seed usage data if using inventory-tracked seed lot
+      let seedUsage: {
+        supplyId: string;
+        lotNumber: string;
+        quantity: number;
+        isNewLot?: boolean;
+        newLotData?: {
+          quantity: number;
+          unit: string;
+          supplier: string;
+          expiryDate?: string;
+        };
+      } | undefined;
+
+      if (logForm.seedLotSelection?.supplyId && logForm.seedLotSelection.lotNumber) {
+        const seedWeight = (loggingTask.orderItem?.product as { seedWeight?: number })?.seedWeight;
+        const trays = logForm.actualTrays ? parseInt(logForm.actualTrays) : (loggingTask.orderItem?.traysNeeded ?? 0);
+        const usageQuantity = seedWeight && trays > 0 ? trays * seedWeight : 0;
+
+        seedUsage = {
+          supplyId: logForm.seedLotSelection.supplyId,
+          lotNumber: logForm.seedLotSelection.lotNumber,
+          quantity: usageQuantity,
+          isNewLot: logForm.seedLotSelection.isNewLot,
+          newLotData: logForm.seedLotSelection.newLotData,
+        };
+      }
+
       // Complete the task
       await completeTask.mutateAsync({
         taskId: loggingTask.id,
@@ -255,6 +296,7 @@ export default function OperationsPage() {
           actualYieldOz: logForm.actualYieldOz ? parseFloat(logForm.actualYieldOz) : undefined,
           seedLot: logForm.seedLot.trim() || undefined,
           completedAt: completedAt.toISOString(),
+          seedUsage,
         },
       });
 
@@ -1037,17 +1079,21 @@ export default function OperationsPage() {
               </div>
 
               {/* Seed Lot - Show for SOAK or SEED tasks if not already set */}
-              {(loggingTask.type === 'SOAK' || loggingTask.type === 'SEED') && !loggingTask.orderItem?.seedLot && (
-                <div>
-                  <label className="block text-sm font-medium mb-1">Seed Lot</label>
-                  <input
-                    type="text"
-                    value={logForm.seedLot}
-                    onChange={(e) => setLogForm({ ...logForm, seedLot: e.target.value })}
-                    className="w-full px-3 py-2 border rounded-md bg-background"
-                    placeholder="e.g., LOT-2025-001 (optional)"
-                  />
-                </div>
+              {(loggingTask.type === 'SOAK' || loggingTask.type === 'SEED') && !loggingTask.orderItem?.seedLot && currentFarmId && (
+                <SeedLotSelector
+                  farmId={currentFarmId}
+                  productId={loggingTask.orderItem?.product?.id}
+                  productName={loggingTask.orderItem?.product?.name || 'Unknown'}
+                  seedWeight={(loggingTask.orderItem?.product as { seedWeight?: number })?.seedWeight || null}
+                  seedUnit={(loggingTask.orderItem?.product as { seedUnit?: string })?.seedUnit || null}
+                  traysNeeded={logForm.actualTrays ? parseInt(logForm.actualTrays) : (loggingTask.orderItem?.traysNeeded ?? 0)}
+                  value={logForm.seedLotSelection}
+                  onChange={(val) => setLogForm({
+                    ...logForm,
+                    seedLotSelection: val,
+                    seedLot: val?.lotNumber ?? '',
+                  })}
+                />
               )}
 
               {/* Rack Destination (for MOVE_TO_LIGHT tasks) - Optional */}

@@ -54,6 +54,19 @@ export function RackSelector({ farmId, value, onChange, trayCount }: RackSelecto
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
+  // Close dropdown on escape key
+  useEffect(() => {
+    if (!isDropdownOpen) return;
+
+    function handleEscape(event: KeyboardEvent) {
+      if (event.key === 'Escape') {
+        setIsDropdownOpen(false);
+      }
+    }
+    document.addEventListener('keydown', handleEscape);
+    return () => document.removeEventListener('keydown', handleEscape);
+  }, [isDropdownOpen]);
+
   // Natural sort comparison for alphanumeric strings (e.g., "Rack 1", "Rack 2", "Rack 10")
   const naturalSort = (a: string, b: string): number => {
     return a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' });

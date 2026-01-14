@@ -1906,13 +1906,25 @@ const farmsRoutes: FastifyPluginAsync = async (fastify) => {
   }, async (request, reply) => {
     try {
       const { farmId, taskId } = request.params as { farmId: string; taskId: string };
-      const { completedBy, completionNotes, actualTrays, actualYieldOz, seedLot, completedAt } = request.body as {
+      const { completedBy, completionNotes, actualTrays, actualYieldOz, seedLot, completedAt, seedUsage } = request.body as {
         completedBy: string;
         completionNotes?: string;
         actualTrays?: number;
         actualYieldOz?: number;
         seedLot?: string;
         completedAt?: string;
+        seedUsage?: {
+          supplyId: string;
+          lotNumber: string;
+          quantity: number;
+          isNewLot?: boolean;
+          newLotData?: {
+            quantity: number;
+            unit: string;
+            supplier: string;
+            expiryDate?: string;
+          };
+        };
       };
 
       if (!completedBy?.trim()) {
@@ -1981,6 +1993,53 @@ const farmsRoutes: FastifyPluginAsync = async (fastify) => {
           where: { id: task.orderItemId },
           data: updateData,
         });
+
+        // Handle seed usage tracking for SOAK or SEED tasks
+        if (seedUsage && (task.type === 'SOAK' || task.type === 'SEED') && seedUsage.supplyId) {
+          // If new lot, first create the purchase record to receive the seeds
+          if (seedUsage.isNewLot && seedUsage.newLotData) {
+            await fastify.prisma.supplyPurchase.create({
+              data: {
+                supplyId: seedUsage.supplyId,
+                lotNumber: seedUsage.lotNumber,
+                quantity: seedUsage.newLotData.quantity,
+                unit: seedUsage.newLotData.unit,
+                unitCost: 0,
+                totalCost: 0,
+                supplier: seedUsage.newLotData.supplier,
+                purchaseDate: new Date(),
+                expiryDate: seedUsage.newLotData.expiryDate ? new Date(seedUsage.newLotData.expiryDate) : null,
+                receivedBy: completedBy.trim(),
+              },
+            });
+
+            // Increment supply stock for received seeds
+            await fastify.prisma.supply.update({
+              where: { id: seedUsage.supplyId },
+              data: { currentStock: { increment: seedUsage.newLotData.quantity } },
+            });
+          }
+
+          // Create usage record for seeds consumed
+          await fastify.prisma.supplyUsage.create({
+            data: {
+              supplyId: seedUsage.supplyId,
+              quantity: seedUsage.quantity,
+              usageType: 'PRODUCTION',
+              taskId: task.id,
+              orderItemId: task.orderItemId,
+              lotNumber: seedUsage.lotNumber,
+              recordedBy: completedBy.trim(),
+              usageDate: new Date(),
+            },
+          });
+
+          // Decrement supply stock for seeds used
+          await fastify.prisma.supply.update({
+            where: { id: seedUsage.supplyId },
+            data: { currentStock: { decrement: seedUsage.quantity } },
+          });
+        }
 
         // If harvested, check if all items in order are harvested
         if (newStatus === 'HARVESTED') {
