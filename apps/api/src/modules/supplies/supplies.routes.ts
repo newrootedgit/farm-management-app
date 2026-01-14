@@ -863,4 +863,78 @@ export default async function suppliesRoutes(fastify: FastifyInstance) {
       return purchases;
     }
   );
+
+  // Get seed supply and lots for a specific product (variety)
+  // This is used by the SeedLotSelector in production planning
+  fastify.get<{ Params: { farmId: string; productId: string } }>(
+    '/farms/:farmId/products/:productId/seed-supply',
+    async (request, reply) => {
+      const { farmId, productId } = request.params;
+
+      // Find supply linked to this product
+      const supply = await prisma.supply.findFirst({
+        where: { farmId, productId },
+        include: {
+          category: true,
+        },
+      });
+
+      if (!supply) {
+        // No supply linked to this product
+        return { supply: null, lots: [] };
+      }
+
+      // Get purchases with lot numbers
+      const purchases = await prisma.supplyPurchase.findMany({
+        where: {
+          supplyId: supply.id,
+          lotNumber: { not: null },
+        },
+        orderBy: { purchaseDate: 'asc' },
+      });
+
+      // Get usage by lot number
+      const usageByLot = await prisma.supplyUsage.groupBy({
+        by: ['lotNumber'],
+        where: {
+          supplyId: supply.id,
+          lotNumber: { not: null },
+        },
+        _sum: {
+          quantity: true,
+        },
+      });
+
+      const usageMap = new Map(
+        usageByLot.map((u) => [u.lotNumber, Number(u._sum.quantity || 0)])
+      );
+
+      // Calculate remaining quantity for each lot
+      const lotsWithRemaining = purchases.map((p) => {
+        const used = usageMap.get(p.lotNumber) || 0;
+        const remaining = Math.max(0, Number(p.quantity) - used);
+        return {
+          id: p.id,
+          lotNumber: p.lotNumber,
+          quantity: Number(p.quantity),
+          remainingQuantity: remaining,
+          unit: p.unit,
+          purchaseDate: p.purchaseDate?.toISOString() || null,
+          expiryDate: p.expiryDate?.toISOString() || null,
+          supplier: p.supplier,
+        };
+      });
+
+      return {
+        supply: {
+          id: supply.id,
+          name: supply.name,
+          currentStock: Number(supply.currentStock),
+          unit: supply.unit,
+          category: supply.category,
+        },
+        lots: lotsWithRemaining,
+      };
+    }
+  );
 }

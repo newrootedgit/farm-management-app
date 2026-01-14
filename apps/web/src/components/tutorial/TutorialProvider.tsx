@@ -23,29 +23,57 @@ const TOUR_CONFIGS: Record<TutorialStep, TourStep[]> = {
   farmSetup: [], // No tour - handled by farm creation
   farmSettings: [
     {
-      title: 'Farm Settings',
+      title: 'Configure Your Farm',
       description:
-        'Configure your farm details here. Set your timezone, currency, and address so orders and schedules work correctly.',
+        'Let\'s set up your farm details. This information is used for scheduling, pricing, and appears on invoices.',
       position: 'center',
     },
     {
-      title: 'Contact Information',
+      title: 'Farm Name',
       description:
-        'Enter your farm email, phone, and website. This information will appear on invoices and customer-facing documents.',
-      targetSelector: '[data-tutorial="farm-info"]',
+        'Give your farm a name. This will appear on invoices and documents sent to customers.',
+      targetSelector: '[data-tutorial="farm-name"]',
       position: 'right',
     },
     {
       title: 'Business Address',
       description:
-        'Set your address. Start typing and select from the dropdown - it will auto-fill city, state, and postal code.',
+        'Enter your address. Start typing and select from the dropdown to auto-fill city, state, and postal code.',
       targetSelector: '[data-tutorial="farm-location"]',
+      position: 'right',
+    },
+    {
+      title: 'Contact Information',
+      description:
+        'Add your email, phone, and website. This information will appear on invoices and documents.',
+      targetSelector: '[data-tutorial="contact-info"]',
+      position: 'right',
+    },
+    {
+      title: 'Timezone & Currency',
+      description:
+        'Set your timezone for scheduling and your preferred currency for pricing.',
+      targetSelector: '[data-tutorial="timezone-currency"]',
+      position: 'right',
+    },
+    {
+      title: 'Team Members',
+      description:
+        'Invite team members to help manage your farm. Each person gets their own login and role-based permissions.',
+      targetSelector: '[data-tutorial="team-members"]',
+      position: 'right',
+    },
+    {
+      title: 'Payment Settings',
+      description:
+        'Connect Stripe to accept credit card payments from customers. Additional payment options coming soon.',
+      targetSelector: '[data-tutorial="payment-settings"]',
       position: 'right',
     },
     {
       title: 'Save Your Changes',
       description:
-        'Remember to save when you make changes. Your settings are now configured!',
+        'Click "Save Changes" at the bottom when you\'re done. Your farm is now configured!',
       position: 'center',
     },
   ],

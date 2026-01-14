@@ -52,18 +52,14 @@ export function TutorialChecklist() {
     return (
       <button
         onClick={toggleMinimize}
-        className="fixed bottom-4 right-4 z-40 bg-primary text-primary-foreground rounded-full p-3 shadow-lg hover:bg-primary/90 transition-colors"
-        title="Show tutorial checklist"
+        className="fixed bottom-4 right-4 z-40 bg-primary text-primary-foreground rounded-full px-4 py-2.5 shadow-lg hover:bg-primary/90 transition-colors flex items-center gap-2"
+        title="Show tutorial"
       >
-        <div className="relative">
-          <svg className="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <path d="M9 11l3 3L22 4" />
-            <path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11" />
-          </svg>
-          <div className="absolute -top-1 -right-1 w-5 h-5 bg-blue-500 rounded-full text-[10px] font-bold flex items-center justify-center">
-            {progress.percentage}%
-          </div>
-        </div>
+        <Sparkles className="w-4 h-4" />
+        <span className="font-medium text-sm">Tutorial</span>
+        <span className="bg-white/20 px-1.5 py-0.5 rounded text-xs font-bold">
+          {progress.percentage}%
+        </span>
       </button>
     );
   }
@@ -74,7 +70,7 @@ export function TutorialChecklist() {
       <div className="flex items-center justify-between px-4 py-3 border-b bg-gradient-to-r from-blue-50 to-purple-50 dark:from-blue-950/30 dark:to-purple-950/30 rounded-t-lg">
         <div className="flex items-center gap-2">
           <Sparkles className="w-4 h-4 text-blue-500" />
-          <h3 className="font-semibold text-sm">Getting Started</h3>
+          <h3 className="font-semibold text-sm">Tutorial</h3>
         </div>
         <div className="flex items-center gap-1">
           <button

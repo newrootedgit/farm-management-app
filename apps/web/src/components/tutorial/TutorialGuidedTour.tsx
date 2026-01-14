@@ -28,6 +28,8 @@ export function TutorialGuidedTour({ steps, onComplete, onSkip }: TutorialGuided
 
   // Update target rect when step changes
   useEffect(() => {
+    let scrollTimeout: ReturnType<typeof setTimeout>;
+
     const updateTargetRect = () => {
       if (step.targetSelector) {
         const target = document.querySelector(step.targetSelector);
@@ -41,7 +43,19 @@ export function TutorialGuidedTour({ steps, onComplete, onSkip }: TutorialGuided
       }
     };
 
-    updateTargetRect();
+    // Scroll target into view when step changes
+    if (step.targetSelector) {
+      const target = document.querySelector(step.targetSelector);
+      if (target) {
+        target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        // Wait for scroll to complete before measuring rect
+        scrollTimeout = setTimeout(updateTargetRect, 350);
+      } else {
+        updateTargetRect();
+      }
+    } else {
+      updateTargetRect();
+    }
 
     // Update on scroll or resize
     window.addEventListener('scroll', updateTargetRect, true);
@@ -50,6 +64,7 @@ export function TutorialGuidedTour({ steps, onComplete, onSkip }: TutorialGuided
     return () => {
       window.removeEventListener('scroll', updateTargetRect, true);
       window.removeEventListener('resize', updateTargetRect);
+      if (scrollTimeout) clearTimeout(scrollTimeout);
     };
   }, [step.targetSelector, currentStep]);
 

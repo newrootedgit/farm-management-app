@@ -2999,3 +2999,34 @@ export function useSupplyLots(farmId: string | null, supplyId: string | undefine
     enabled: !!farmId && !!supplyId,
   });
 }
+
+// Product Seed Supply - for SeedLotSelector
+export interface SeedLotWithRemaining {
+  id: string;
+  lotNumber: string | null;
+  quantity: number;
+  remainingQuantity: number;
+  unit: string | null;
+  purchaseDate: string | null;
+  expiryDate: string | null;
+  supplier: string | null;
+}
+
+export interface ProductSeedSupplyResponse {
+  supply: {
+    id: string;
+    name: string;
+    currentStock: number;
+    unit: string | null;
+    category: { id: string; name: string };
+  } | null;
+  lots: SeedLotWithRemaining[];
+}
+
+export function useProductSeedSupply(farmId: string | null, productId: string | undefined) {
+  return useQuery({
+    queryKey: ['product-seed-supply', farmId, productId],
+    queryFn: () => fetchApi<ProductSeedSupplyResponse>(`/api/v1/farms/${farmId}/products/${productId}/seed-supply`),
+    enabled: !!farmId && !!productId,
+  });
+}

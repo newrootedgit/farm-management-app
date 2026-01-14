@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useFarmStore } from '@/stores/farm-store';
 import {
@@ -12,6 +12,217 @@ import {
 } from '@/lib/api-client';
 import { AddressAutocomplete } from '@/components/AddressAutocomplete';
 import { useToast } from '@/components/ui/Toast';
+import { ChevronDown, Search } from 'lucide-react';
+
+// Comprehensive timezone list
+const TIMEZONES = [
+  { value: 'Pacific/Midway', label: '(UTC-11:00) Midway Island' },
+  { value: 'Pacific/Honolulu', label: '(UTC-10:00) Hawaii' },
+  { value: 'America/Anchorage', label: '(UTC-09:00) Alaska' },
+  { value: 'America/Los_Angeles', label: '(UTC-08:00) Pacific Time (US & Canada)' },
+  { value: 'America/Phoenix', label: '(UTC-07:00) Arizona' },
+  { value: 'America/Denver', label: '(UTC-07:00) Mountain Time (US & Canada)' },
+  { value: 'America/Chicago', label: '(UTC-06:00) Central Time (US & Canada)' },
+  { value: 'America/Mexico_City', label: '(UTC-06:00) Mexico City' },
+  { value: 'America/New_York', label: '(UTC-05:00) Eastern Time (US & Canada)' },
+  { value: 'America/Bogota', label: '(UTC-05:00) Bogota, Lima' },
+  { value: 'America/Caracas', label: '(UTC-04:00) Caracas' },
+  { value: 'America/Halifax', label: '(UTC-04:00) Atlantic Time (Canada)' },
+  { value: 'America/Santiago', label: '(UTC-04:00) Santiago' },
+  { value: 'America/St_Johns', label: '(UTC-03:30) Newfoundland' },
+  { value: 'America/Sao_Paulo', label: '(UTC-03:00) Sao Paulo' },
+  { value: 'America/Buenos_Aires', label: '(UTC-03:00) Buenos Aires' },
+  { value: 'Atlantic/South_Georgia', label: '(UTC-02:00) Mid-Atlantic' },
+  { value: 'Atlantic/Azores', label: '(UTC-01:00) Azores' },
+  { value: 'UTC', label: '(UTC+00:00) UTC' },
+  { value: 'Europe/London', label: '(UTC+00:00) London, Dublin, Lisbon' },
+  { value: 'Africa/Casablanca', label: '(UTC+00:00) Casablanca' },
+  { value: 'Europe/Paris', label: '(UTC+01:00) Paris, Berlin, Rome, Madrid' },
+  { value: 'Europe/Amsterdam', label: '(UTC+01:00) Amsterdam, Brussels' },
+  { value: 'Africa/Lagos', label: '(UTC+01:00) West Central Africa' },
+  { value: 'Europe/Athens', label: '(UTC+02:00) Athens, Istanbul' },
+  { value: 'Europe/Helsinki', label: '(UTC+02:00) Helsinki, Kyiv' },
+  { value: 'Africa/Cairo', label: '(UTC+02:00) Cairo' },
+  { value: 'Africa/Johannesburg', label: '(UTC+02:00) Johannesburg' },
+  { value: 'Asia/Jerusalem', label: '(UTC+02:00) Jerusalem' },
+  { value: 'Europe/Moscow', label: '(UTC+03:00) Moscow, St. Petersburg' },
+  { value: 'Asia/Kuwait', label: '(UTC+03:00) Kuwait, Riyadh' },
+  { value: 'Africa/Nairobi', label: '(UTC+03:00) Nairobi' },
+  { value: 'Asia/Tehran', label: '(UTC+03:30) Tehran' },
+  { value: 'Asia/Dubai', label: '(UTC+04:00) Dubai, Abu Dhabi' },
+  { value: 'Asia/Baku', label: '(UTC+04:00) Baku' },
+  { value: 'Asia/Kabul', label: '(UTC+04:30) Kabul' },
+  { value: 'Asia/Karachi', label: '(UTC+05:00) Karachi, Islamabad' },
+  { value: 'Asia/Tashkent', label: '(UTC+05:00) Tashkent' },
+  { value: 'Asia/Kolkata', label: '(UTC+05:30) Mumbai, New Delhi' },
+  { value: 'Asia/Kathmandu', label: '(UTC+05:45) Kathmandu' },
+  { value: 'Asia/Dhaka', label: '(UTC+06:00) Dhaka' },
+  { value: 'Asia/Almaty', label: '(UTC+06:00) Almaty' },
+  { value: 'Asia/Yangon', label: '(UTC+06:30) Yangon' },
+  { value: 'Asia/Bangkok', label: '(UTC+07:00) Bangkok, Hanoi, Jakarta' },
+  { value: 'Asia/Hong_Kong', label: '(UTC+08:00) Hong Kong, Singapore' },
+  { value: 'Asia/Shanghai', label: '(UTC+08:00) Beijing, Shanghai' },
+  { value: 'Asia/Taipei', label: '(UTC+08:00) Taipei' },
+  { value: 'Australia/Perth', label: '(UTC+08:00) Perth' },
+  { value: 'Asia/Tokyo', label: '(UTC+09:00) Tokyo, Seoul' },
+  { value: 'Australia/Darwin', label: '(UTC+09:30) Darwin' },
+  { value: 'Australia/Adelaide', label: '(UTC+09:30) Adelaide' },
+  { value: 'Australia/Sydney', label: '(UTC+10:00) Sydney, Melbourne' },
+  { value: 'Australia/Brisbane', label: '(UTC+10:00) Brisbane' },
+  { value: 'Pacific/Guam', label: '(UTC+10:00) Guam' },
+  { value: 'Pacific/Noumea', label: '(UTC+11:00) New Caledonia' },
+  { value: 'Pacific/Auckland', label: '(UTC+12:00) Auckland, Wellington' },
+  { value: 'Pacific/Fiji', label: '(UTC+12:00) Fiji' },
+  { value: 'Pacific/Tongatapu', label: '(UTC+13:00) Tonga' },
+];
+
+// Comprehensive currency list
+const CURRENCIES = [
+  { value: 'USD', label: 'USD ($)', name: 'US Dollar' },
+  { value: 'EUR', label: 'EUR (€)', name: 'Euro' },
+  { value: 'GBP', label: 'GBP (£)', name: 'British Pound' },
+  { value: 'CAD', label: 'CAD ($)', name: 'Canadian Dollar' },
+  { value: 'AUD', label: 'AUD ($)', name: 'Australian Dollar' },
+  { value: 'JPY', label: 'JPY (¥)', name: 'Japanese Yen' },
+  { value: 'CNY', label: 'CNY (¥)', name: 'Chinese Yuan' },
+  { value: 'INR', label: 'INR (₹)', name: 'Indian Rupee' },
+  { value: 'KRW', label: 'KRW (₩)', name: 'South Korean Won' },
+  { value: 'MXN', label: 'MXN ($)', name: 'Mexican Peso' },
+  { value: 'BRL', label: 'BRL (R$)', name: 'Brazilian Real' },
+  { value: 'CHF', label: 'CHF (Fr)', name: 'Swiss Franc' },
+  { value: 'SEK', label: 'SEK (kr)', name: 'Swedish Krona' },
+  { value: 'NOK', label: 'NOK (kr)', name: 'Norwegian Krone' },
+  { value: 'DKK', label: 'DKK (kr)', name: 'Danish Krone' },
+  { value: 'NZD', label: 'NZD ($)', name: 'New Zealand Dollar' },
+  { value: 'SGD', label: 'SGD ($)', name: 'Singapore Dollar' },
+  { value: 'HKD', label: 'HKD ($)', name: 'Hong Kong Dollar' },
+  { value: 'ZAR', label: 'ZAR (R)', name: 'South African Rand' },
+  { value: 'RUB', label: 'RUB (₽)', name: 'Russian Ruble' },
+  { value: 'TRY', label: 'TRY (₺)', name: 'Turkish Lira' },
+  { value: 'PLN', label: 'PLN (zł)', name: 'Polish Zloty' },
+  { value: 'THB', label: 'THB (฿)', name: 'Thai Baht' },
+  { value: 'IDR', label: 'IDR (Rp)', name: 'Indonesian Rupiah' },
+  { value: 'MYR', label: 'MYR (RM)', name: 'Malaysian Ringgit' },
+  { value: 'PHP', label: 'PHP (₱)', name: 'Philippine Peso' },
+  { value: 'CZK', label: 'CZK (Kč)', name: 'Czech Koruna' },
+  { value: 'ILS', label: 'ILS (₪)', name: 'Israeli Shekel' },
+  { value: 'AED', label: 'AED (د.إ)', name: 'UAE Dirham' },
+  { value: 'SAR', label: 'SAR (﷼)', name: 'Saudi Riyal' },
+  { value: 'CLP', label: 'CLP ($)', name: 'Chilean Peso' },
+  { value: 'COP', label: 'COP ($)', name: 'Colombian Peso' },
+  { value: 'ARS', label: 'ARS ($)', name: 'Argentine Peso' },
+  { value: 'PEN', label: 'PEN (S/)', name: 'Peruvian Sol' },
+  { value: 'VND', label: 'VND (₫)', name: 'Vietnamese Dong' },
+  { value: 'EGP', label: 'EGP (£)', name: 'Egyptian Pound' },
+  { value: 'NGN', label: 'NGN (₦)', name: 'Nigerian Naira' },
+  { value: 'PKR', label: 'PKR (₨)', name: 'Pakistani Rupee' },
+  { value: 'BDT', label: 'BDT (৳)', name: 'Bangladeshi Taka' },
+  { value: 'KES', label: 'KES (KSh)', name: 'Kenyan Shilling' },
+];
+
+// Searchable Select Component
+function SearchableSelect({
+  value,
+  onChange,
+  options,
+  placeholder,
+  searchPlaceholder,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  options: { value: string; label: string; name?: string }[];
+  placeholder: string;
+  searchPlaceholder: string;
+}) {
+  const [isOpen, setIsOpen] = useState(false);
+  const [search, setSearch] = useState('');
+  const dropdownRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const selectedOption = options.find((o) => o.value === value);
+
+  const filteredOptions = options.filter((option) => {
+    const query = search.toLowerCase();
+    return (
+      option.label.toLowerCase().includes(query) ||
+      option.value.toLowerCase().includes(query) ||
+      (option.name && option.name.toLowerCase().includes(query))
+    );
+  });
+
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+        setIsOpen(false);
+        setSearch('');
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  useEffect(() => {
+    if (isOpen && inputRef.current) {
+      inputRef.current.focus();
+    }
+  }, [isOpen]);
+
+  return (
+    <div className="relative" ref={dropdownRef}>
+      <button
+        type="button"
+        onClick={() => setIsOpen(!isOpen)}
+        className="w-full px-3 py-2 border rounded-md bg-background text-left flex items-center justify-between"
+      >
+        <span className={selectedOption ? '' : 'text-muted-foreground'}>
+          {selectedOption?.label || placeholder}
+        </span>
+        <ChevronDown className={`w-4 h-4 text-muted-foreground transition-transform ${isOpen ? 'rotate-180' : ''}`} />
+      </button>
+
+      {isOpen && (
+        <div className="absolute z-50 w-full mt-1 bg-background border rounded-md shadow-lg">
+          <div className="p-2 border-b">
+            <div className="relative">
+              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+              <input
+                ref={inputRef}
+                type="text"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder={searchPlaceholder}
+                className="w-full pl-8 pr-3 py-1.5 text-sm border rounded bg-background"
+              />
+            </div>
+          </div>
+          <div className="max-h-60 overflow-auto">
+            {filteredOptions.length === 0 ? (
+              <div className="px-3 py-2 text-sm text-muted-foreground">No results found</div>
+            ) : (
+              filteredOptions.map((option) => (
+                <button
+                  key={option.value}
+                  type="button"
+                  onClick={() => {
+                    onChange(option.value);
+                    setIsOpen(false);
+                    setSearch('');
+                  }}
+                  className={`w-full px-3 py-2 text-left text-sm hover:bg-muted ${
+                    option.value === value ? 'bg-primary/10 font-medium' : ''
+                  }`}
+                >
+                  {option.label}
+                  {option.name && <span className="text-muted-foreground ml-2">- {option.name}</span>}
+                </button>
+              ))
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 export default function SettingsPage() {
   const navigate = useNavigate();
@@ -31,8 +242,6 @@ export default function SettingsPage() {
   const [name, setName] = useState('');
   const [timezone, setTimezone] = useState('UTC');
   const [currency, setCurrency] = useState('USD');
-  const [weightUnit, setWeightUnit] = useState('oz');
-  const [lengthUnit, setLengthUnit] = useState('in');
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
   // Contact information
@@ -170,8 +379,6 @@ export default function SettingsPage() {
       setName(farm.name || '');
       setTimezone(farm.timezone || 'UTC');
       setCurrency(farm.currency || 'USD');
-      setWeightUnit(farm.weightUnit || 'oz');
-      setLengthUnit(farm.lengthUnit || 'in');
       // Contact info - parse phone with country code
       if (farm.phone) {
         // Try to extract country code from stored phone
@@ -246,8 +453,6 @@ export default function SettingsPage() {
         name: name.trim(),
         timezone,
         currency,
-        weightUnit: weightUnit as 'oz' | 'g' | 'lb' | 'kg',
-        lengthUnit: lengthUnit as 'in' | 'ft' | 'cm' | 'm',
         // Contact info
         phone: formattedPhone,
         email: email || undefined,
@@ -321,28 +526,18 @@ export default function SettingsPage() {
       </div>
 
       {/* Farm details */}
-      <div className="border rounded-lg p-6 bg-card space-y-4" data-tutorial="farm-info">
-        <h2 className="text-lg font-semibold">Farm Details</h2>
+      <div className="border rounded-lg p-6 bg-card space-y-4" data-tutorial="farm-name">
+        <h2 className="text-lg font-semibold">Farm Name</h2>
 
         <div>
-          <label className="block text-sm font-medium mb-1">Farm Name</label>
+          <label className="block text-sm font-medium mb-1">Name</label>
           <input
             type="text"
             value={name}
             onChange={(e) => setName(e.target.value)}
             className="w-full px-3 py-2 border rounded-md bg-background"
+            placeholder="My Microgreens Farm"
           />
-        </div>
-
-        <div>
-          <label className="block text-sm font-medium mb-1">Slug</label>
-          <input
-            type="text"
-            value={farm?.slug || ''}
-            className="w-full px-3 py-2 border rounded-md bg-background text-muted-foreground"
-            disabled
-          />
-          <p className="text-xs text-muted-foreground mt-1">Used in URLs (cannot be changed)</p>
         </div>
       </div>
 
@@ -432,7 +627,7 @@ export default function SettingsPage() {
       </div>
 
       {/* Contact Information */}
-      <div className="border rounded-lg p-6 bg-card space-y-4">
+      <div className="border rounded-lg p-6 bg-card space-y-4" data-tutorial="contact-info">
         <h2 className="text-lg font-semibold">Contact Information</h2>
         <p className="text-sm text-muted-foreground">
           Contact details that will appear on documents and be available to customers.
@@ -512,7 +707,7 @@ export default function SettingsPage() {
       </div>
 
       {/* Timezone & Currency */}
-      <div className="border rounded-lg p-6 bg-card space-y-4">
+      <div className="border rounded-lg p-6 bg-card space-y-4" data-tutorial="timezone-currency">
         <h2 className="text-lg font-semibold">Timezone & Currency</h2>
         <p className="text-sm text-muted-foreground">
           Set your timezone for scheduling and your preferred currency for pricing.
@@ -521,71 +716,23 @@ export default function SettingsPage() {
         <div className="grid grid-cols-2 gap-4">
           <div>
             <label className="block text-sm font-medium mb-1">Timezone</label>
-            <select
+            <SearchableSelect
               value={timezone}
-              onChange={(e) => setTimezone(e.target.value)}
-              className="w-full px-3 py-2 border rounded-md bg-background"
-            >
-              <option value="UTC">UTC</option>
-              <option value="America/New_York">Eastern Time</option>
-              <option value="America/Chicago">Central Time</option>
-              <option value="America/Denver">Mountain Time</option>
-              <option value="America/Los_Angeles">Pacific Time</option>
-              <option value="Europe/London">London (GMT)</option>
-              <option value="Europe/Paris">Paris (CET)</option>
-              <option value="Australia/Sydney">Sydney (AEST)</option>
-            </select>
+              onChange={setTimezone}
+              options={TIMEZONES}
+              placeholder="Select timezone..."
+              searchPlaceholder="Search timezones..."
+            />
           </div>
           <div>
             <label className="block text-sm font-medium mb-1">Currency</label>
-            <select
+            <SearchableSelect
               value={currency}
-              onChange={(e) => setCurrency(e.target.value)}
-              className="w-full px-3 py-2 border rounded-md bg-background"
-            >
-              <option value="USD">USD ($)</option>
-              <option value="EUR">EUR (€)</option>
-              <option value="GBP">GBP (£)</option>
-              <option value="CAD">CAD ($)</option>
-              <option value="AUD">AUD ($)</option>
-            </select>
-          </div>
-        </div>
-      </div>
-
-      {/* Preferred Unit of Measurement */}
-      <div className="border rounded-lg p-6 bg-card space-y-4">
-        <h2 className="text-lg font-semibold">Preferred Unit of Measurement</h2>
-        <p className="text-sm text-muted-foreground">
-          Set your preferred units for product weights and lengths. You can change these at any point.
-        </p>
-
-        <div className="grid grid-cols-2 gap-4">
-          <div>
-            <label className="block text-sm font-medium mb-1">Product Weight Unit</label>
-            <select
-              value={weightUnit}
-              onChange={(e) => setWeightUnit(e.target.value)}
-              className="w-full px-3 py-2 border rounded-md bg-background"
-            >
-              <option value="oz">Ounces (oz)</option>
-              <option value="g">Grams (g)</option>
-              <option value="lb">Pounds (lb)</option>
-              <option value="kg">Kilograms (kg)</option>
-            </select>
-          </div>
-          <div>
-            <label className="block text-sm font-medium mb-1">Length Unit</label>
-            <select
-              value={lengthUnit}
-              onChange={(e) => setLengthUnit(e.target.value)}
-              className="w-full px-3 py-2 border rounded-md bg-background"
-            >
-              <option value="in">Inches (in)</option>
-              <option value="ft">Feet (ft)</option>
-              <option value="cm">Centimeters (cm)</option>
-              <option value="m">Meters (m)</option>
-            </select>
+              onChange={setCurrency}
+              options={CURRENCIES}
+              placeholder="Select currency..."
+              searchPlaceholder="Search currencies..."
+            />
           </div>
         </div>
       </div>
@@ -644,7 +791,7 @@ export default function SettingsPage() {
       </div>
 
       {/* Team */}
-      <div className="border rounded-lg p-6 bg-card space-y-4">
+      <div className="border rounded-lg p-6 bg-card space-y-4" data-tutorial="team-members">
         <div className="flex items-center justify-between">
           <h2 className="text-lg font-semibold">Team Members</h2>
           <button className="text-sm text-primary hover:underline">Invite Member</button>
@@ -656,7 +803,7 @@ export default function SettingsPage() {
       </div>
 
       {/* Payment Settings */}
-      <div className="border rounded-lg p-6 bg-card space-y-4">
+      <div className="border rounded-lg p-6 bg-card space-y-4" data-tutorial="payment-settings">
         <h2 className="text-lg font-semibold">Payment Settings</h2>
         <p className="text-muted-foreground">Configure how you accept payments from customers.</p>
 
@@ -757,8 +904,6 @@ export default function SettingsPage() {
               setName(farm.name || '');
               setTimezone(farm.timezone || 'UTC');
               setCurrency(farm.currency || 'USD');
-              setWeightUnit(farm.weightUnit || 'oz');
-              setLengthUnit(farm.lengthUnit || 'in');
               if (farm.phone) {
                 const phoneMatch = farm.phone.match(/^(\+\d{1,3})\s*(.*)$/);
                 if (phoneMatch) {

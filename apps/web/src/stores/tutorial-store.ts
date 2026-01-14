@@ -110,7 +110,7 @@ export const TUTORIAL_STEPS: TutorialStepInfo[] = [
   {
     id: 'farmSettings',
     title: 'Configure farm settings',
-    description: 'Set timezone, currency, and address',
+    description: 'Set your farm name, address, contact info, and timezone',
     category: 'setup',
     route: '/settings',
     hasTour: true,
