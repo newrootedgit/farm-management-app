@@ -1,6 +1,7 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useFarmStore } from '@/stores/farm-store';
 import { useTutorialStore, TutorialStep, VARIETY_SUGGESTIONS, SKU_SUGGESTIONS } from '@/stores/tutorial-store';
+import { TutorialCelebration } from './TutorialCelebration';
 
 // Minimum time between auto-completing steps (ms) - prevents rapid cascading completions
 const STEP_COMPLETION_THROTTLE_MS = 500;
@@ -374,6 +375,27 @@ const TOUR_CONFIGS: Record<TutorialStep, TourStep[]> = {
   ],
 };
 
+// Human-readable step titles for celebration display
+const STEP_TITLES: Record<TutorialStep, string> = {
+  farmSetup: 'Farm Created',
+  farmSettings: 'Farm Settings Configured',
+  suppliesAdded: 'Supplies Added',
+  suppliesReceived: 'Supplies Received',
+  firstVarietyCreated: 'First Variety Created',
+  secondVarietyCreated: 'Second Variety Created',
+  firstSkuCreated: 'First SKU Created',
+  secondSkuCreated: 'Second SKU Created',
+  mixCreated: 'Mix Created',
+  mixSkuCreated: 'Mix SKU Created',
+  customerAdded: 'Customer Added',
+  storeConfigured: 'Store Configured',
+  teamMemberAdded: 'Team Member Added',
+  orderCreated: 'Order Created',
+  seedingLogged: 'Seeding Logged',
+  transplantLogged: 'Transplant Logged',
+  harvestLogged: 'Harvest Logged',
+};
+
 interface TutorialProviderProps {
   children: React.ReactNode;
 }
@@ -390,6 +412,9 @@ export function TutorialProvider({ children }: TutorialProviderProps) {
     endTour,
     setFarmId,
   } = useTutorialStore();
+
+  // State for celebration animation
+  const [celebrationStep, setCelebrationStep] = useState<TutorialStep | null>(null);
 
   // Track farm changes and reset tutorial progress when farm switches
   useEffect(() => {
@@ -446,11 +471,13 @@ export function TutorialProvider({ children }: TutorialProviderProps) {
       return true;
     };
 
-    // Helper: Mark step complete, set flag, and update throttle timestamp
+    // Helper: Mark step complete, set flag, update throttle timestamp, and trigger celebration
     const completeStep = (step: keyof typeof completedSteps) => {
       markStepComplete(step);
       stepCompletedThisRender = true;
       lastStepCompletionTime.current = Date.now();
+      // Trigger celebration animation
+      setCelebrationStep(step);
     };
 
     // Farm setup - complete if farm exists
@@ -665,6 +692,12 @@ export function TutorialProvider({ children }: TutorialProviderProps) {
           onSkip={() => {
             endTour();
           }}
+        />
+      )}
+      {celebrationStep && (
+        <TutorialCelebration
+          stepTitle={STEP_TITLES[celebrationStep]}
+          onComplete={() => setCelebrationStep(null)}
         />
       )}
     </>

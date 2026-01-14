@@ -866,6 +866,18 @@ export function useCompleteTask(farmId: string) {
       actualYieldOz?: number;
       seedLot?: string;
       completedAt?: string;
+      seedUsage?: {
+        supplyId: string;
+        lotNumber: string;
+        quantity: number;
+        isNewLot?: boolean;
+        newLotData?: {
+          quantity: number;
+          unit: string;
+          supplier: string;
+          expiryDate?: string;
+        };
+      };
     }}) =>
       fetchApi<Task>(`/api/v1/farms/${farmId}/tasks/${taskId}/complete`, {
         method: 'POST',
